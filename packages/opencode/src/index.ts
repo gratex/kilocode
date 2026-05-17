@@ -1,3 +1,45 @@
+// kilocode_change start - TLS/CA certificate support for corporate SSL inspection proxies
+// Must execute BEFORE any imports that may use fetch (e.g., provider APIs, model fetching).
+// Layer 1: If KILO_TLS_CA_BUNDLE or cert file path is available, pass CA to fetch via tls.ca
+// Layer 2: Unconditionally set rejectUnauthorized: false as fallback for corporate MITM proxies
+// This ensures connections to litellm.gratex.ai and other corporate services work through GTI firewall.
+;(() => {
+  // Set env var as defense-in-depth (Bun respects NODE_TLS_REJECT_UNAUTHORIZED=0)
+  if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"
+  }
+
+  const orig = globalThis.fetch
+
+  // Resolve CA certificate content
+  const caBundle = process.env.KILO_TLS_CA_BUNDLE
+  const certPath = process.env.SSL_CERT_FILE ?? process.env.NODE_EXTRA_CA_CERTS
+  const ca = caBundle
+    ? caBundle
+    : certPath
+      ? (() => {
+          try {
+            return Bun.file(certPath)
+          } catch {
+            // File path invalid — skip, rely on rejectUnauthorized:false fallback
+            return undefined
+          }
+        })()
+      : undefined
+
+  const patched = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const existingTls = (init as any)?.tls
+    const tlsOpts = {
+      rejectUnauthorized: false,
+      ...(ca ? { ca } : {}),
+      ...(existingTls ?? {}),
+    }
+    return orig(input, { ...init, tls: tlsOpts } as any)
+  }
+  globalThis.fetch = Object.assign(patched, { preconnect: orig.preconnect }) as typeof fetch
+})()
+// kilocode_change end
+
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"

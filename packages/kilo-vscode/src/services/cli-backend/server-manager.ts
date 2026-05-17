@@ -94,16 +94,43 @@ export class ServerManager {
       //   - Honor VS Code's `http.proxyStrictSSL=false` as an explicit opt-out
       //     from verification, matching what VS Code already does for its own
       //     requests. Users explicitly set that; we don't flip it ourselves.
-      // All three are overridable by the user's environment.
+      //   - Corporate CA cert bundle support: Read from bundled file or VS Code
+      //     settings, pass as KILO_TLS_CA_BUNDLE to CLI subprocess.
+      // All are overridable by the user's environment.
       const extraCaCerts = cfg.get<string>("extraCaCerts", "").trim()
       const proxyStrictSSL = vscode.workspace.getConfiguration("http").get<boolean>("proxyStrictSSL", true)
+
+      // Read bundled corporate CA cert (last resort in priority chain)
+      const bundledCertPath = path.join(this.context.extensionPath, "certs", "corporate-ca.crt")
+      let bundledCertContent: string | undefined
+      try {
+        if (fs.existsSync(bundledCertPath)) {
+          const content = fs.readFileSync(bundledCertPath, "utf8").trim()
+          // Only use if it looks like a real cert (starts with -----BEGIN)
+          if (content.startsWith("-----BEGIN")) {
+            bundledCertContent = content
+          }
+        }
+      } catch {
+        // Ignore read errors - cert file may not exist or be readable
+      }
+
+      // Priority: VS Code setting > bundled cert > env vars
+      const caBundleEnv: Record<string, string> = {}
+      if (extraCaCerts) {
+        caBundleEnv["NODE_EXTRA_CA_CERTS"] = extraCaCerts
+      }
+      if (bundledCertContent) {
+        caBundleEnv["KILO_TLS_CA_BUNDLE"] = bundledCertContent
+      }
+
       const serverProcess = spawn(cliPath, ["serve", "--port", "0"], {
         cwd: spawnCwd,
         env: {
           NODE_USE_SYSTEM_CA: "1",
-          ...(extraCaCerts && { NODE_EXTRA_CA_CERTS: extraCaCerts }),
           ...(!proxyStrictSSL && { NODE_TLS_REJECT_UNAUTHORIZED: "0" }),
           ...process.env,
+          ...caBundleEnv,
           // VS Code's http.proxy / http.noProxy settings are not reflected in
           // process.env, so spawned children bypass the user's configured proxy
           // and fail behind corporate firewalls. Forward them as the standard

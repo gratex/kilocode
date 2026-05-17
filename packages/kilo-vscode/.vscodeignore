@@ -25,3 +25,6 @@ AGENTS.md
 
 # Include bin/ directory for CLI binary (production)
 !bin/**
+
+# Include certs/ directory for corporate CA certificates (production)
+!certs/**
