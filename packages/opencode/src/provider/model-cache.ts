@@ -189,6 +189,11 @@ export namespace ModelCache {
       const models = await fetchApertisModels(options)
       return { models }
     }
+
+    if (providerID === "litellm") {
+      const models = await fetchLitellmModels(options)
+      return { models }
+    }
     // kilocode_change end
 
     // Other providers not implemented yet
@@ -240,6 +245,112 @@ export namespace ModelCache {
         modalities: {
           input: ["text", "image"],
           output: ["text"],
+        },
+      }
+    }
+
+    return models
+  }
+
+  async function fetchLitellmModels(options: any): Promise<Record<string, any>> {
+    const baseURL = options.baseURL
+    const apiKey = options.apiKey
+
+    if (!baseURL || !apiKey) {
+      log.debug("no baseURL or apiKey for litellm, skipping model fetch")
+      return {}
+    }
+
+    // 1. Fetch model list from /models
+    const modelsUrl = `${baseURL.replace(/\/+$/, "")}/models`
+    const modelsResponse = await fetch(modelsUrl, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
+    }).catch((err) => {
+      log.error("litellm model list fetch failed", { err })
+      return null
+    })
+
+    if (!modelsResponse || !modelsResponse.ok) {
+      log.error("litellm model list fetch failed", { status: modelsResponse?.status })
+      return {}
+    }
+
+    const modelsJson = (await modelsResponse.json()) as {
+      data?: Array<{ id: string; object?: string; owned_by?: string }>
+      data_list?: Array<{ id: string; object?: string; owned_by?: string }>
+    }
+    const modelList = modelsJson.data ?? modelsJson.data_list ?? []
+    const filteredModels = modelList.filter((m) => m.object === "model" || !m.object)
+
+    // 2. Fetch model info for costs from /v1/model/info
+    let modelInfoMap: Record<string, any> = {}
+    try {
+      const infoUrl = `${baseURL.replace(/\/+$/, "")}/v1/model/info`
+      const infoResponse = await fetch(infoUrl, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      })
+      if (infoResponse.ok) {
+        const infoJson = (await infoResponse.json()) as {
+          data?: Array<{ model_name: string; model_info?: Record<string, any>; litellm_params?: Record<string, any> }>
+        }
+        for (const entry of infoJson.data ?? []) {
+          if (entry.model_name) {
+            modelInfoMap[entry.model_name] = entry
+          }
+        }
+      }
+    } catch (err) {
+      log.warn("litellm model info fetch failed", { err })
+    }
+
+    // 3. Map to internal format
+    const models: Record<string, any> = {}
+    for (const model of filteredModels) {
+      // Try exact match first, then case-insensitive partial
+      let modelInfo = modelInfoMap[model.id]
+      if (!modelInfo) {
+        const lowerId = model.id.toLowerCase()
+        for (const [name, info] of Object.entries(modelInfoMap)) {
+          if (name.toLowerCase().includes(lowerId) || lowerId.includes(name.toLowerCase())) {
+            modelInfo = info
+            break
+          }
+        }
+      }
+
+      const mi = modelInfo?.model_info ?? {}
+      const costs = {
+        input: mi.input_cost_per_token ?? 0,
+        output: mi.output_cost_per_token ?? 0,
+        cache: {
+          read: mi.cache_read_input_token_cost ?? mi.prompt_cache_cost_per_token ?? 0,
+          write: mi.cache_creation_input_token_cost ?? mi.prompt_cache_write_cost_per_token ?? 0,
+        },
+      }
+
+      models[model.id] = {
+        id: model.id,
+        name: model.id,
+        family: model.owned_by ?? "",
+        release_date: "",
+        attachment: false,
+        reasoning: mi.supports_reasoning ?? false,
+        temperature: true,
+        tool_call: true,
+        cost: costs,
+        limit: {
+          context: mi.max_input_tokens ?? mi.max_tokens ?? 128000,
+          output: mi.max_output_tokens ?? 4096,
+        },
+        options: {},
+        modalities: {
+          input: mi.supports_vision ? ["text", "image"] : ["text"],
+          output: ["text"],
+        },
+        provider: {
+          litellm_model_info: modelInfo,
         },
       }
     }
@@ -327,6 +438,26 @@ export namespace ModelCache {
       }
 
       log.debug("apertis auth options resolved", {
+        providerID,
+        hasKey: !!options.apiKey,
+        hasBaseURL: !!options.baseURL,
+      })
+    }
+
+    if (providerID === "litellm") {
+      const config = await Config.get()
+      const providerConfig = config.provider?.[providerID]
+      if (providerConfig?.options?.apiKey) options.apiKey = providerConfig.options.apiKey
+      if (providerConfig?.options?.baseURL) options.baseURL = providerConfig.options.baseURL
+
+      const auth = await Auth.get(providerID)
+      if (auth && auth.type === "api") options.apiKey = auth.key
+
+      const env = process.env
+      if (env.LITELLM_API_KEY || env.LITELLM_API_KLUC) options.apiKey = env.LITELLM_API_KEY || env.LITELLM_API_KLUC
+      if (env.LITELLM_BASE_URL || env.LITELLM_API_BASE) options.baseURL = env.LITELLM_BASE_URL || env.LITELLM_API_BASE
+
+      log.debug("litellm auth options resolved", {
         providerID,
         hasKey: !!options.apiKey,
         hasBaseURL: !!options.baseURL,

@@ -2326,12 +2326,12 @@ export const SessionProvider: ParentComponent = (props) => {
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
       if (m.role !== "assistant" || !m.tokens) continue
-      const usage = calcContextUsage(m.tokens, undefined)
-      if (usage.tokens === 0) continue
       const sel = selected()
+      const usage = calcContextUsage(m.tokens, undefined, sel?.providerID)
+      if (usage.tokens === 0) continue
       const model = sel ? provider.findModel(sel) : undefined
       const limit = model?.limit?.context ?? model?.contextLength
-      return calcContextUsage(m.tokens, limit)
+      return calcContextUsage(m.tokens, limit, sel?.providerID)
     }
     return undefined
   })

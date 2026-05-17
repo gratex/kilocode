@@ -136,6 +136,7 @@ import { configFeatures } from "./features"
 import { createAutoApproveBridge } from "./kilo-provider/auto-approve"
 import type { KiloProviderOptions } from "./kilo-provider/options"
 import { fetchKiloEmbeddingModelCatalog } from "@kilocode/kilo-gateway"
+import { fetchLiteLLMSpend, clearSpendCache } from "./litellm-spend"
 
 type MessageLoadMode = "replace" | "prepend" | "focus" | "reconcile"
 type ContextMessage = { contextDirectory?: unknown }
@@ -263,6 +264,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private diffVirtualProvider: import("./DiffVirtualProvider").DiffVirtualProvider | undefined
   private remoteService: RemoteStatusService | null = null
   private unsubscribeRemote: (() => void) | null = null
+  private _liteLLMSpendTimer: ReturnType<typeof setInterval> | undefined
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -803,7 +805,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "completeProviderOAuth":
         case "disconnectProvider":
         case "saveCustomProvider":
+        case "saveLiteLLMProvider":
           await this.handleProviderAction(message)
+          break
+        case "requestLiteLLMSpend":
+          this.fetchAndSendLiteLLMSpend().catch((e) => console.error("[Kilo New] requestLiteLLMSpend failed:", e))
           break
         case "fetchCustomProviderModels":
           this.handleFetchCustomProviderModels(message).catch((e) =>
@@ -1799,6 +1805,37 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     if (msg.type === "disconnectProvider") return disconnectProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
     if (msg.type === "saveCustomProvider" && config)
       return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
+    if (msg.type === "saveLiteLLMProvider" && config)
+      return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
+  }
+
+  private async fetchAndSendLiteLLMSpend(retries = 0) {
+    const client = this.client
+    if (!client) {
+      if (retries < 5) {
+        setTimeout(() => this.fetchAndSendLiteLLMSpend(retries + 1), 2000)
+      }
+      return
+    }
+    const dir = this.getWorkspaceDirectory(this.currentSession?.id)
+    const spend = await fetchLiteLLMSpend(client, dir)
+    this.postMessage({ type: "liteLLMSpendLoaded", spend })
+    this.setupLiteLLMSpendRefresh()
+  }
+
+  private setupLiteLLMSpendRefresh() {
+    if (this._liteLLMSpendTimer) clearInterval(this._liteLLMSpendTimer)
+    this._liteLLMSpendTimer = setInterval(
+      () => {
+        if (this.client) {
+          const dir = this.getWorkspaceDirectory(this.currentSession?.id)
+          fetchLiteLLMSpend(this.client, dir).then((spend) => {
+            if (spend) this.postMessage({ type: "liteLLMSpendLoaded", spend })
+          })
+        }
+      },
+      5 * 60 * 1000,
+    )
   }
 
   private async handleFetchCustomProviderModels(msg: Record<string, unknown>): Promise<void> {
@@ -3563,6 +3600,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.speechToTextDisposable?.dispose()
     this.telemetryStateDisposable?.dispose()
     this.autoApproveBridge?.dispose()
+    if (this._liteLLMSpendTimer) clearInterval(this._liteLLMSpendTimer)
     this.streams.dispose()
     this.isWebviewReady = false
     this.promptRecoveryQueued = false

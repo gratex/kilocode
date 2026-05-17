@@ -396,6 +396,12 @@ export async function saveCustomProvider(
   const id = validateID(ctx, requestId, providerID, "connect")
   if (!id) return
 
+  // LiteLLM provider uses the same save logic as custom providers
+  // but with a fixed npm package
+  if (providerID === "litellm") {
+    provider = { ...provider, npm: "@ai-sdk/openai-compatible" }
+  }
+
   const sanitized = sanitizeCustomProviderConfig(provider)
   if ("error" in sanitized) {
     postError(ctx, requestId, providerID, "connect", sanitized.error)

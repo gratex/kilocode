@@ -896,6 +896,11 @@ export interface CustomProviderModelsFetchedMessage {
   auth?: boolean
 }
 
+export interface LiteLLMSpendMessage {
+  type: "liteLLMSpendLoaded"
+  spend: { spent: number; remaining: number; limit: number; percentageUsed: number; resetDate: string | null } | null
+}
+
 export interface McpStatusEntry {
   status: "connected" | "disabled" | "failed" | "needs_auth" | "needs_client_registration"
   error?: string
@@ -1050,6 +1055,7 @@ export type ExtensionMessage =
   | ProviderDisconnectedMessage
   | ProviderActionErrorMessage
   | CustomProviderModelsFetchedMessage
+  | LiteLLMSpendMessage
   | RecentsLoadedMessage
   | FavoritesLoadedMessage
   | ModelSelectionsLoadedMessage

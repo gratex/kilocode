@@ -81,6 +81,7 @@ import { NotificationsProvider } from "../src/context/notifications"
 import { FeedbackProvider } from "../src/context/feedback"
 import { SessionProvider, useSession } from "../src/context/session"
 import { WorktreeModeProvider } from "../src/context/worktree-mode"
+import { LiteLLMSpendProvider } from "../src/context/litellm-spend"
 import { ChatView } from "../src/components/chat"
 import HistoryView from "../src/components/history/HistoryView"
 import { NewWorktreeDialog } from "./NewWorktreeDialog"
@@ -3135,15 +3136,17 @@ export const AgentManagerApp: Component = () => {
                             <IndexingProvider>
                               <KiloEmbeddingModelsProvider>
                                 <NotificationsProvider>
-                                  <SessionProvider>
-                                    <FeedbackProvider>
-                                      <WorktreeModeProvider>
-                                        <DataBridge>
-                                          <AgentManagerContent />
-                                        </DataBridge>
-                                      </WorktreeModeProvider>
-                                    </FeedbackProvider>
-                                  </SessionProvider>
+                                  <LiteLLMSpendProvider>
+                                    <SessionProvider>
+                                      <FeedbackProvider>
+                                        <WorktreeModeProvider>
+                                          <DataBridge>
+                                            <AgentManagerContent />
+                                          </DataBridge>
+                                        </WorktreeModeProvider>
+                                      </FeedbackProvider>
+                                    </SessionProvider>
+                                  </LiteLLMSpendProvider>
                                 </NotificationsProvider>
                               </KiloEmbeddingModelsProvider>
                             </IndexingProvider>

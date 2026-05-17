@@ -944,6 +944,19 @@ export interface SaveCustomProviderMessage {
   apiKeyChanged?: boolean
 }
 
+export interface RequestLiteLLMSpendMessage {
+  type: "requestLiteLLMSpend"
+}
+
+export interface SaveLiteLLMProviderMessage {
+  type: "saveLiteLLMProvider"
+  requestId: string
+  providerID: string
+  config: Record<string, unknown>
+  apiKey?: string
+  apiKeyChanged?: boolean
+}
+
 export interface FetchCustomProviderModelsMessage {
   type: "fetchCustomProviderModels"
   requestId: string
@@ -1219,6 +1232,8 @@ export type WebviewMessage =
   | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
   | SaveCustomProviderMessage
+  | RequestLiteLLMSpendMessage
+  | SaveLiteLLMProviderMessage
   | FetchCustomProviderModelsMessage
   | PersistRecentsRequest
   | RequestRecentsMessage

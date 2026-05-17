@@ -1,6 +1,8 @@
 export const KILO_PROVIDER_ID = "kilo"
 export const KILO_AUTO = { providerID: KILO_PROVIDER_ID, modelID: "kilo-auto/free" } as const
 export const CUSTOM_PROVIDER_PACKAGE = "@ai-sdk/openai-compatible"
+export const LITE_LLM_PROVIDER_ID = "litellm"
+export const LITE_LLM_PROVIDER_PACKAGE = "@ai-sdk/openai-compatible"
 export const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/
 
 export const PROVIDER_PRIORITY = [
@@ -11,6 +13,7 @@ export const PROVIDER_PRIORITY = [
   "google",
   "openrouter",
   "vercel",
+  LITE_LLM_PROVIDER_ID,
 ] as const
 
 export function parseModelString(raw: string | undefined | null) {

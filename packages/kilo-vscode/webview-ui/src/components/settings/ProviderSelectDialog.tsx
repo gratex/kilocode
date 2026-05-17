@@ -18,7 +18,8 @@ import {
   providerIcon,
 } from "./provider-catalog"
 import CustomProviderDialog from "./CustomProviderDialog"
-import { KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
+import LiteLLMProviderDialog from "./LiteLLMProviderDialog"
+import { KILO_PROVIDER_ID, LITE_LLM_PROVIDER_ID } from "../../../../src/shared/provider-model"
 
 type ProviderItem = {
   id: string
@@ -46,6 +47,10 @@ const ProviderSelectDialog = () => {
         id: CUSTOM_PROVIDER_ID,
         name: language.t("settings.providers.tag.customProvider"),
       },
+      {
+        id: LITE_LLM_PROVIDER_ID,
+        name: language.t("settings.providers.tag.liteLLMProvider"),
+      },
       ...available.map((item) => ({
         id: item.id,
         name: item.name,
@@ -56,6 +61,11 @@ const ProviderSelectDialog = () => {
   function open(item: ProviderItem) {
     if (item.id === CUSTOM_PROVIDER_ID) {
       dialog.show(() => <CustomProviderDialog onBack={() => dialog.show(() => <ProviderSelectDialog />)} />)
+      return
+    }
+
+    if (item.id === LITE_LLM_PROVIDER_ID) {
+      dialog.show(() => <LiteLLMProviderDialog onBack={() => dialog.show(() => <ProviderSelectDialog />)} />)
       return
     }
 
@@ -129,6 +139,9 @@ const ProviderSelectDialog = () => {
               </Show>
               <Show when={item.id === CUSTOM_PROVIDER_ID}>
                 <Tag>{language.t("settings.providers.tag.custom")}</Tag>
+              </Show>
+              <Show when={item.id === LITE_LLM_PROVIDER_ID}>
+                <Tag>{language.t("settings.providers.tag.liteLLM")}</Tag>
               </Show>
             </div>
           </div>

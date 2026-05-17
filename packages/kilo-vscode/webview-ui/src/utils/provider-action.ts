@@ -9,6 +9,7 @@ import type {
   ProviderDisconnectedMessage,
   ProviderOAuthReadyMessage,
   SaveCustomProviderMessage,
+  SaveLiteLLMProviderMessage,
   WebviewMessage,
 } from "../types/messages"
 
@@ -18,6 +19,7 @@ type ProviderRequest =
   | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
   | SaveCustomProviderMessage
+  | SaveLiteLLMProviderMessage
 
 type ProviderRequestInput =
   | Omit<ConnectProviderMessage, "requestId">
@@ -25,6 +27,7 @@ type ProviderRequestInput =
   | Omit<CompleteProviderOAuthMessage, "requestId">
   | Omit<DisconnectProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
+  | Omit<SaveLiteLLMProviderMessage, "requestId">
 
 type Transport = {
   postMessage: (message: WebviewMessage) => void

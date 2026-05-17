@@ -20,14 +20,7 @@ import type { EnrichedModel } from "../../context/provider"
 import { useSession, SessionContext } from "../../context/session"
 import { useLanguage } from "../../context/language"
 import type { ModelSelection } from "../../types/messages"
-import {
-  KILO_GATEWAY_ID,
-  isSmall,
-  providerSortKey,
-  isFree,
-  buildTriggerLabel,
-  sanitizeName,
-} from "./model-selector-utils"
+import { isSmall, providerSortKey, isFree, buildTriggerLabel, sanitizeName } from "./model-selector-utils"
 import { ModelPreview } from "./ModelPreview"
 import { searchMatch } from "../../utils/search-match"
 
@@ -169,7 +162,7 @@ export const ModelSelectorBase: Component<ModelSelectorBaseProps> = (props) => {
     const c = connected()
     return models().filter((m) => {
       if (!props.includeAutoSmall && isSmall(m)) return false
-      return m.providerID === KILO_GATEWAY_ID || c.includes(m.providerID)
+      return c.includes(m.providerID)
     })
   })
 

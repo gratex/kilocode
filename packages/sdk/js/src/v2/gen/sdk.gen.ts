@@ -140,6 +140,10 @@ import type {
   ProjectUpdateResponses,
   ProviderAuthResponses,
   ProviderListResponses,
+  ProviderLitellmModelCostErrors,
+  ProviderLitellmModelCostResponses,
+  ProviderLitellmSpendErrors,
+  ProviderLitellmSpendResponses,
   ProviderOauthAuthorizeErrors,
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
@@ -3323,6 +3327,78 @@ export class Oauth extends HeyApiClient {
   }
 }
 
+export class Litellm extends HeyApiClient {
+  /**
+   * Get LiteLLM spend info
+   *
+   * Get current spend, budget, and remaining credit for the LiteLLM API key.
+   */
+  public spend<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ProviderLitellmSpendResponses,
+      ProviderLitellmSpendErrors,
+      ThrowOnError
+    >({
+      url: "/provider/litellm/spend",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get LiteLLM model cost
+   *
+   * Get per-token cost for a specific LiteLLM model.
+   */
+  public modelCost<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      model?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      ProviderLitellmModelCostResponses,
+      ProviderLitellmModelCostErrors,
+      ThrowOnError
+    >({
+      url: "/provider/litellm/model-cost",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Provider extends HeyApiClient {
   /**
    * List providers
@@ -3387,6 +3463,11 @@ export class Provider extends HeyApiClient {
   private _oauth?: Oauth
   get oauth(): Oauth {
     return (this._oauth ??= new Oauth({ client: this.client }))
+  }
+
+  private _litellm?: Litellm
+  get litellm(): Litellm {
+    return (this._litellm ??= new Litellm({ client: this.client }))
   }
 }
 

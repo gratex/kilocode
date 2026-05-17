@@ -5787,6 +5787,96 @@
         ]
       }
     },
+    "/provider/litellm/spend": {
+      "get": {
+        "operationId": "provider.litellm.spend",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get LiteLLM spend info",
+        "description": "Get current spend, budget, and remaining credit for the LiteLLM API key.",
+        "responses": {
+          "200": {
+            "description": "LiteLLM spend info"
+          },
+          "401": {
+            "description": "LiteLLM not configured"
+          },
+          "500": {
+            "description": "Failed to fetch key info"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\n\nconst client = createKiloClient()\nawait client.provider.litellm.spend({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/provider/litellm/model-cost": {
+      "get": {
+        "operationId": "provider.litellm.modelCost",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "directory",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workspace",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "model",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "summary": "Get LiteLLM model cost",
+        "description": "Get per-token cost for a specific LiteLLM model.",
+        "responses": {
+          "200": {
+            "description": "Model cost info"
+          },
+          "400": {
+            "description": "Model name required"
+          },
+          "401": {
+            "description": "LiteLLM not configured"
+          },
+          "500": {
+            "description": "Failed to fetch model cost"
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\n\nconst client = createKiloClient()\nawait client.provider.litellm.modelCost({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/sync/start": {
       "post": {
         "operationId": "sync.start",
@@ -16568,7 +16658,7 @@
               },
               "openTelemetry": {
                 "description": "Enable telemetry. Set to false to opt-out.",
-                "default": true,
+                "default": false,
                 "type": "boolean"
               },
               "primary_tools": {

@@ -91,9 +91,13 @@ export function calcContextUsage(
     cache?: { read: number; write: number }
   },
   contextLimit: number | undefined,
+  providerID?: string,
 ): { tokens: number; percentage: number | null } {
-  const total =
-    tokens.input + tokens.output + (tokens.reasoning ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
+  // For LiteLLM, input tokens already include cache tokens, so don't double-count
+  const includesCachedTokens = providerID === "litellm"
+  const total = includesCachedTokens
+    ? tokens.input + tokens.output + (tokens.reasoning ?? 0)
+    : tokens.input + tokens.output + (tokens.reasoning ?? 0) + (tokens.cache?.read ?? 0) + (tokens.cache?.write ?? 0)
   const percentage = contextLimit ? Math.round((total / contextLimit) * 100) : null
   return { tokens: total, percentage }
 }

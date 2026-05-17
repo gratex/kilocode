@@ -347,7 +347,13 @@ export const getUsage = (input: {
   const reasoningTokens = safe(input.usage.outputTokenDetails?.reasoningTokens ?? input.usage.reasoningTokens ?? 0)
 
   const cacheReadInputTokens = safe(
-    input.usage.inputTokenDetails?.cacheReadTokens ?? input.usage.cachedInputTokens ?? 0,
+    // kilocode_change start
+    input.usage.inputTokenDetails?.cacheReadTokens ??
+      input.usage.cachedInputTokens ??
+      // @ts-expect-error — LiteLLM stores cached tokens in metadata
+      input.metadata?.["litellm"]?.["usage"]?.["prompt_tokens_details"]?.["cached_tokens"] ??
+      // kilocode_change end
+      0,
   )
   const cacheWriteInputTokens = safe(
     Number(

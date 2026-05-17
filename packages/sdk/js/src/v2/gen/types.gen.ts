@@ -5249,6 +5249,67 @@ export type ProviderOauthCallbackResponses = {
 
 export type ProviderOauthCallbackResponse = ProviderOauthCallbackResponses[keyof ProviderOauthCallbackResponses]
 
+export type ProviderLitellmSpendData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/provider/litellm/spend"
+}
+
+export type ProviderLitellmSpendErrors = {
+  /**
+   * LiteLLM not configured
+   */
+  401: unknown
+  /**
+   * Failed to fetch key info
+   */
+  500: unknown
+}
+
+export type ProviderLitellmSpendResponses = {
+  /**
+   * LiteLLM spend info
+   */
+  200: unknown
+}
+
+export type ProviderLitellmModelCostData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    model?: string
+  }
+  url: "/provider/litellm/model-cost"
+}
+
+export type ProviderLitellmModelCostErrors = {
+  /**
+   * Model name required
+   */
+  400: unknown
+  /**
+   * LiteLLM not configured
+   */
+  401: unknown
+  /**
+   * Failed to fetch model cost
+   */
+  500: unknown
+}
+
+export type ProviderLitellmModelCostResponses = {
+  /**
+   * Model cost info
+   */
+  200: unknown
+}
+
 export type SyncStartData = {
   body?: never
   path?: never

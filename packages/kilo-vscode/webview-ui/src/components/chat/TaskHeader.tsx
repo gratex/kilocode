@@ -16,6 +16,7 @@ import { Checkbox } from "@kilocode/kilo-ui/checkbox"
 import { useSession } from "../../context/session"
 import { collapseCostBreakdown } from "../../context/session-utils"
 import { useLanguage } from "../../context/language"
+import { useLiteLLMSpend } from "../../context/litellm-spend"
 import { useVSCode } from "../../context/vscode"
 import { TaskTimeline } from "./TaskTimeline"
 import { ContextProgress } from "./ContextProgress"
@@ -77,6 +78,42 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
       if (has) return tk
     }
     return undefined
+  })
+
+  // Cumulative token tracking across all assistant messages
+  const cumulativeTokens = createMemo(() => {
+    const msgs = session.messages()
+    let input = 0,
+      output = 0,
+      cacheRead = 0,
+      cacheWrite = 0
+    for (const m of msgs) {
+      if (m.role === "assistant" && m.tokens) {
+        input += m.tokens.input
+        output += m.tokens.output
+        cacheRead += m.tokens.cache?.read ?? 0
+        cacheWrite += m.tokens.cache?.write ?? 0
+      }
+    }
+    return { input, output, cacheRead, cacheWrite }
+  })
+
+  // LiteLLM budget display
+  const { spend: liteLLMSpend } = useLiteLLMSpend()
+
+  const isLiteLLM = createMemo(() => session.selected()?.providerID === "litellm")
+
+  const liteLLMBudget = createMemo(() => {
+    if (!isLiteLLM()) return undefined
+    const spend = liteLLMSpend()
+    if (!spend) return undefined
+    return {
+      spent: `$${spend.spent.toFixed(2)}`,
+      remaining: `$${spend.remaining.toFixed(2)}`,
+      limit: `$${spend.limit.toFixed(2)}`,
+      pct: Math.round(spend.percentageUsed),
+      resetDate: spend.resetDate,
+    }
   })
 
   const hasTimeline = createMemo(() => {
@@ -158,6 +195,13 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
               >
                 <span>{ctx().pct ?? ctx().tokens}</span>
               </Tooltip>
+            )}
+          </Show>
+          <Show when={liteLLMBudget()}>
+            {(budget) => (
+              <div style={{ "font-size": "11px", color: "var(--vscode-descriptionForeground)", "margin-left": "4px" }}>
+                Budget: {budget().pct}% used ({budget().remaining} / {budget().limit})
+              </div>
             )}
           </Show>
           <Show when={!props.readonly}>

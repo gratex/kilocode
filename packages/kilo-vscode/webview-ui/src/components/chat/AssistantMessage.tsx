@@ -182,6 +182,14 @@ export const AssistantMessage: Component<AssistantMessageProps> = (props) => {
     return (stored as SDKPart[]).filter((part) => isRenderable(part))
   })
 
+  // Per-message cost display
+  const fmtCost = (cost: number | undefined): string | undefined => {
+    if (cost === undefined || cost === 0) return undefined
+    return `$${cost.toFixed(4)}`
+  }
+
+  const messageCost = createMemo(() => fmtCost(props.message.cost))
+
   return (
     <>
       <For each={parts()}>
@@ -275,6 +283,18 @@ export const AssistantMessage: Component<AssistantMessageProps> = (props) => {
           )
         }}
       </For>
+      <Show when={messageCost()}>
+        <div
+          style={{
+            "font-size": "12px",
+            color: "var(--vscode-descriptionForeground)",
+            "margin-top": "8px",
+            "text-align": "right",
+          }}
+        >
+          {messageCost()}
+        </div>
+      </Show>
     </>
   )
 }

@@ -152,6 +152,34 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
         autoload: false,
         options: { headers: DEFAULT_HEADERS },
       }),
+
+    // kilocode_change start
+    litellm: Effect.fnUntraced(function* (input: any) {
+      const env = yield* dep.env()
+      const config = yield* dep.config()
+      const providerConfig = config.provider?.["litellm"]
+
+      const hasKey = yield* Effect.gen(function* () {
+        if (env.LITELLM_API_KEY || env.LITELLM_API_KLUC) return true
+        if (yield* dep.auth("litellm")) return true
+        if (providerConfig?.options?.apiKey) return true
+        return false
+      })
+
+      const baseURL = providerConfig?.options?.baseURL ?? env.LITELLM_BASE_URL ?? env.LITELLM_API_BASE
+
+      return {
+        autoload: hasKey && !!baseURL,
+        options: {
+          ...(baseURL ? { baseURL } : {}),
+          ...(hasKey ? {} : { apiKey: "anonymous" }),
+        },
+        async getModel(sdk: any, modelID: string) {
+          return sdk.chat(modelID)
+        },
+      }
+    }),
+    // kilocode_change end
   }
 }
 

@@ -111,6 +111,9 @@ const icons = {
   models: `<path fill-rule="evenodd" clip-rule="evenodd" d="M17.5 10C12.2917 10 10 12.2917 10 17.5C10 12.2917 7.70833 10 2.5 10C7.70833 10 10 7.70833 10 2.5C10 7.70833 12.2917 10 17.5 10Z" stroke="currentColor"/>`,
   discard: `<path d="M7.5 5L4.167 8.333L7.5 11.667M4.583 8.333h6.667a4.167 4.167 0 0 1 4.167 4.167" stroke="currentColor" stroke-linecap="square"/>`, // kilocode_change
   "arrow-undo-down": `<path d="M4.08333 11.0859L1.75 8.7526L4.08333 6.41927M2.33333 8.7526L12.5417 8.7526L12.5417 3.21094L7 3.21094" stroke="currentColor" stroke-width="1" stroke-linecap="square"/>`,
+  "cost-metric": `<path d="M10 2.5L2.5 6.25V13.75L10 17.5L17.5 13.75V6.25L10 2.5Z" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 8.75V11.25M8.75 10H11.25" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>`,
+  "context-metric": `<path d="M3.75 5.625H16.25M3.75 9.375H16.25M3.75 13.125H16.25M2.5 2.5H17.5V17.5H2.5V2.5Z" stroke="currentColor" stroke-linecap="square"/><rect x="5" y="5.625" width="1.875" height="1.875" fill="currentColor"/><rect x="5" y="9.375" width="1.875" height="1.875" fill="currentColor"/><rect x="5" y="13.125" width="1.875" height="1.875" fill="currentColor"/>`,
+  "spend-tracking": `<circle cx="10" cy="10" r="7.5" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M10 4.5V10L13.5 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>`,
 }
 
 export interface IconProps extends ComponentProps<"svg"> {

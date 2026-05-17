@@ -1803,5 +1803,14 @@ OjAwvs/J9QAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wMy0yNVQwODowMToxNyswMDowMOna
         d="M 554.228 729.711 C 659.104 725.931 747.227 807.802 751.164 912.672 C 755.1 1017.54 673.362 1105.79 568.498 1109.88 C 463.411 1113.98 374.937 1032.03 370.992 926.942 C 367.047 821.849 449.129 733.498 554.228 729.711 z"
       ></path>
     </symbol>
+    <symbol viewBox="0 0 40 40" id="litellm">
+      <path d="M8 10h24v4H8zM8 18h24v4H8zM8 26h24v4H8z" fill="currentColor"></path>
+      <circle cx="12" cy="12" r="2" fill="currentColor"></circle>
+      <circle cx="28" cy="12" r="2" fill="currentColor"></circle>
+      <circle cx="12" cy="20" r="2" fill="currentColor"></circle>
+      <circle cx="28" cy="20" r="2" fill="currentColor"></circle>
+      <circle cx="12" cy="28" r="2" fill="currentColor"></circle>
+      <circle cx="28" cy="28" r="2" fill="currentColor"></circle>
+    </symbol>
   </defs>
 </svg>

@@ -48,6 +48,13 @@ export {
   type OrganizationModeConfig,
 } from "./api/modes.js"
 export { fetchKilocodeNotifications, type KilocodeNotification } from "./api/notifications.js"
+export {
+  fetchLiteLLMKeyInfo,
+  calculateLiteLLMBudgetStatus,
+  fetchLiteLLMModelCost,
+  type LiteLLMKeyInfo,
+  type LiteLLMModelCost,
+} from "./api/litellm.js"
 
 // ============================================================================
 // Server Routes (optional - requires hono and OpenCode dependencies)

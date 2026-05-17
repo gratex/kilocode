@@ -185,6 +185,15 @@ export namespace KiloSession {
       return Number.isFinite(n) ? n : undefined
     }
 
+    // 0. LiteLLM cost_breakdown — most accurate when available
+    const litellmCostBreakdown = input.metadata?.["litellm"]?.["cost_breakdown"] as
+      | { total_cost?: number; input_cost?: number; output_cost?: number }
+      | undefined
+    if (litellmCostBreakdown && litellmCostBreakdown.total_cost !== undefined) {
+      const cost = num(litellmCostBreakdown.total_cost)
+      if (cost !== undefined) return cost
+    }
+
     // 1. OpenRouter chat completions
     const orUsage = input.metadata?.["openrouter"]?.["usage"] as
       | { cost?: number; costDetails?: { upstreamInferenceCost?: number } }

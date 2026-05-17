@@ -117,6 +117,7 @@ export const iconNames = [
   "abliteration-ai", // kilocode_change
   "abacus",
   "302ai",
+  "litellm",
 ] as const
 
 export type IconName = (typeof iconNames)[number]

@@ -203,6 +203,13 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
       const aptFetch = {
         ...(apt?.baseURL ? { baseURL: apt.baseURL } : {}),
       }
+      // kilocode_change start
+      const litellmConfig = config.provider?.litellm?.options
+      const litellmBase = litellmConfig?.baseURL ?? (process.env.LITELLM_BASE_URL || process.env.LITELLM_API_BASE)
+      const litellmFetch = {
+        ...(litellmConfig?.baseURL ? { baseURL: litellmConfig.baseURL } : {}),
+      }
+      // kilocode_change end
 
       if (kiloAllowed) {
         const opts = config.provider?.kilo?.options
@@ -213,14 +220,19 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
           ...(base ? { baseURL: base } : {}),
           ...(org ? { kilocodeOrganizationId: org } : {}),
         }
-        const [kilo, apertis] = yield* Effect.all(
+        const [kilo, apertis, litellm] = yield* Effect.all(
           [
             Effect.promise(() => ModelCache.fetch("kilo", fetch).catch(() => ({}))),
             providers["apertis"]
               ? Effect.succeed(null)
               : Effect.promise(() => ModelCache.fetch("apertis", aptFetch).catch(() => ({}))),
+            // kilocode_change start
+            providers["litellm"]
+              ? Effect.succeed(null)
+              : Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({}))),
+            // kilocode_change end
           ],
-          { concurrency: 2 },
+          { concurrency: 3 },
         )
 
         providers["kilo"] = {
@@ -247,6 +259,21 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
             yield* Effect.sync(() => void ModelCache.refresh("apertis", aptFetch).catch(() => {}))
           }
         }
+        // kilocode_change start
+        if (!providers["litellm"] && litellm !== null) {
+          providers["litellm"] = {
+            id: "litellm",
+            name: "LiteLLM Proxy",
+            env: ["LITELLM_API_KEY"],
+            api: litellmBase,
+            npm: "@ai-sdk/openai-compatible",
+            models: litellm,
+          }
+          if (Object.keys(litellm).length === 0) {
+            yield* Effect.sync(() => void ModelCache.refresh("litellm", litellmFetch).catch(() => {}))
+          }
+        }
+        // kilocode_change end
         return providers
       }
 
@@ -264,6 +291,22 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
           yield* Effect.sync(() => void ModelCache.refresh("apertis", aptFetch).catch(() => {}))
         }
       }
+      // kilocode_change start
+      if (!providers["litellm"]) {
+        const litellm = yield* Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({})))
+        providers["litellm"] = {
+          id: "litellm",
+          name: "LiteLLM Proxy",
+          env: ["LITELLM_API_KEY"],
+          api: litellmBase,
+          npm: "@ai-sdk/openai-compatible",
+          models: litellm,
+        }
+        if (Object.keys(litellm).length === 0) {
+          yield* Effect.sync(() => void ModelCache.refresh("litellm", litellmFetch).catch(() => {}))
+        }
+      }
+      // kilocode_change end
       return providers
     })
     // kilocode_change end
