@@ -40,6 +40,7 @@ import { dict as appBs } from "../../webview-ui/src/i18n/bs"
 import { dict as appTr } from "../../webview-ui/src/i18n/tr"
 import { dict as appNl } from "../../webview-ui/src/i18n/nl"
 import { dict as appUk } from "../../webview-ui/src/i18n/uk"
+import { dict as appSk } from "../../webview-ui/src/i18n/sk"
 
 // Layer 2: upstream UI (@opencode-ai/ui re-exported via @kilocode/kilo-ui)
 import { dict as uiEn } from "../../../ui/src/i18n/en"
@@ -61,6 +62,7 @@ import { dict as uiBs } from "../../../ui/src/i18n/bs"
 import { dict as uiTr } from "../../../ui/src/i18n/tr"
 import { dict as uiNl } from "../../../ui/src/i18n/nl"
 import { dict as uiUk } from "../../../ui/src/i18n/uk"
+import { dict as uiSk } from "../../../ui/src/i18n/sk"
 
 // Layer 3: kilo-i18n overrides
 import { dict as kiloEn } from "../../../kilo-i18n/src/en"
@@ -74,6 +76,7 @@ import { dict as kiloDa } from "../../../kilo-i18n/src/da"
 import { dict as kiloJa } from "../../../kilo-i18n/src/ja"
 import { dict as kiloPl } from "../../../kilo-i18n/src/pl"
 import { dict as kiloRu } from "../../../kilo-i18n/src/ru"
+import { dict as kiloSk } from "../../../kilo-i18n/src/sk"
 import { dict as kiloAr } from "../../../kilo-i18n/src/ar"
 import { dict as kiloNo } from "../../../kilo-i18n/src/no"
 import { dict as kiloBr } from "../../../kilo-i18n/src/br"
@@ -88,6 +91,7 @@ import { dict as amEn } from "../../webview-ui/agent-manager/i18n/en"
 import { dict as amTr } from "../../webview-ui/agent-manager/i18n/tr"
 import { dict as amNl } from "../../webview-ui/agent-manager/i18n/nl"
 import { dict as amUk } from "../../webview-ui/agent-manager/i18n/uk"
+import { dict as amSk } from "../../webview-ui/agent-manager/i18n/sk"
 
 // ── Extension-side dictionaries ─────────────────────────────────────────────
 
@@ -110,6 +114,7 @@ import { dict as cliBs } from "../../src/services/cli-backend/i18n/bs"
 import { dict as cliTr } from "../../src/services/cli-backend/i18n/tr"
 import { dict as cliNl } from "../../src/services/cli-backend/i18n/nl"
 import { dict as cliUk } from "../../src/services/cli-backend/i18n/uk"
+import { dict as cliSk } from "../../src/services/cli-backend/i18n/sk"
 
 import { dict as acEn } from "../../src/services/autocomplete/i18n/en"
 
@@ -137,6 +142,7 @@ const appLocales: Record<string, Record<string, string>> = {
   tr: appTr,
   nl: appNl,
   uk: appUk,
+  sk: appSk,
 }
 
 const kiloLocales: Record<string, Record<string, string>> = {
@@ -159,6 +165,7 @@ const kiloLocales: Record<string, Record<string, string>> = {
   tr: kiloTr,
   nl: kiloNl,
   uk: kiloUk,
+  sk: kiloSk,
 }
 
 const uiLocales: Record<string, Record<string, string>> = {
@@ -181,6 +188,7 @@ const uiLocales: Record<string, Record<string, string>> = {
   tr: uiTr,
   nl: uiNl,
   uk: uiUk,
+  sk: uiSk,
 }
 
 const cliLocales: Record<string, Record<string, string>> = {
@@ -203,6 +211,7 @@ const cliLocales: Record<string, Record<string, string>> = {
   tr: cliTr,
   nl: cliNl,
   uk: cliUk,
+  sk: cliSk,
 }
 
 // Merge webview dictionaries in the same priority order as language.tsx

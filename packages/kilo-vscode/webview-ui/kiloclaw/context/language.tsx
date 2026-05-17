@@ -26,6 +26,7 @@ import { dict as tr } from "../i18n/tr"
 import { dict as zh } from "../i18n/zh"
 import { dict as uk } from "../i18n/uk"
 import { dict as zht } from "../i18n/zht"
+import { dict as sk } from "../i18n/sk"
 
 const dicts: Record<Locale, Record<string, string>> = {
   en,
@@ -47,6 +48,7 @@ const dicts: Record<Locale, Record<string, string>> = {
   uk: { ...en, ...uk },
   zh: { ...en, ...zh },
   zht: { ...en, ...zht },
+  sk: { ...en, ...sk },
 }
 
 type LanguageCtx = {

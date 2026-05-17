@@ -13,6 +13,7 @@ import { dict as nl } from "@kilocode/kilo-i18n/nl"
 import { dict as no } from "@kilocode/kilo-i18n/no"
 import { dict as pl } from "@kilocode/kilo-i18n/pl"
 import { dict as ru } from "@kilocode/kilo-i18n/ru"
+import { dict as sk } from "@kilocode/kilo-i18n/sk"
 import { dict as th } from "@kilocode/kilo-i18n/th"
 import { dict as tr } from "@kilocode/kilo-i18n/tr"
 import { dict as uk } from "@kilocode/kilo-i18n/uk"
@@ -34,6 +35,7 @@ const dicts: Record<string, Record<string, string>> = {
   no,
   pl,
   ru,
+  sk,
   th,
   tr,
   uk,

@@ -416,6 +416,7 @@ export const dict = {
   "language.bs": "Bosanski",
   "language.th": "ไทย",
   "language.tr": "Türkçe",
+  "language.sk": "Slovenčina",
 
   "toast.language.title": "Taal",
   "toast.language.description": "Omgeschakeld naar {{language}}",
