@@ -75,11 +75,14 @@ export namespace Telemetry {
     const vscodeVersion = process.env.KILO_VSCODE_VERSION
     if (vscodeVersion) props.vscodeVersion = vscodeVersion
 
-    Client.init()
-
+    // kilocode_change start - telemetry hard-disable: only init when enabled
     const level = process.env.KILO_TELEMETRY_LEVEL
     const enabled = level ? level === "all" : options.enabled
-    Client.setEnabled(enabled)
+    if (enabled) {
+      Client.init()
+      Client.setEnabled(true)
+    }
+    // kilocode_change end
 
     await Identity.getMachineId()
 

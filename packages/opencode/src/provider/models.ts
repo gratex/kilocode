@@ -197,7 +197,7 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
       const config = yield* Effect.promise(() => Config.get())
       const disabled = new Set(config.disabled_providers ?? [])
       const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-      const kiloAllowed = (!enabled || enabled.has("kilo")) && !disabled.has("kilo")
+      const kiloAllowed = (!enabled || enabled.has("kilo")) && !disabled.has("kilo") && !Flag.KILO_DISABLE_GATEWAY // kilocode_change - air-gap: disable gateway provider
       const apt = config.provider?.apertis?.options
       const aptBase = apt?.baseURL ?? "https://api.apertis.ai/v1"
       const aptFetch = {

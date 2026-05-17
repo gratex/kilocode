@@ -2,14 +2,20 @@ import { PostHog } from "posthog-node"
 import { Identity } from "./identity.js"
 import { TelemetryEvent } from "./events.js"
 
-const POSTHOG_API_KEY = "phc_GK2Pxl0HPj5ZPfwhLRjXrtdz8eD7e9MKnXiFrOqnB6z"
-const POSTHOG_HOST = "https://us.i.posthog.com"
+// kilocode_change start - telemetry hard-disable: env var key, empty = disabled
+const POSTHOG_API_KEY = process.env.KILO_POSTHOG_API_KEY || ""
+const POSTHOG_HOST = process.env.KILO_POSTHOG_HOST || "https://us.i.posthog.com"
+// kilocode_change end
 
 export namespace Client {
   let client: PostHog | null = null
   let enabled = true
 
   export function init() {
+    if (!POSTHOG_API_KEY) {
+      console.log("[Telemetry] No PostHog API key configured, telemetry disabled")
+      return
+    }
     client = new PostHog(POSTHOG_API_KEY, {
       host: POSTHOG_HOST,
       disableGeoip: false,

@@ -35,6 +35,10 @@ export const TelemetryRoutes = lazy(() =>
       ),
       async (c) => {
         const body = c.req.valid("json")
+        // kilocode_change - defense-in-depth: skip when telemetry hard-disabled
+        if (!process.env.KILO_POSTHOG_API_KEY) {
+          return c.json(true)
+        }
         try {
           Telemetry.track(body.event as any, body.properties)
         } catch {
@@ -67,6 +71,10 @@ export const TelemetryRoutes = lazy(() =>
       validator("json", z.object({ enabled: z.boolean() })),
       async (c) => {
         const body = c.req.valid("json")
+        // kilocode_change - defense-in-depth: never re-enable when no PostHog key configured
+        if (!process.env.KILO_POSTHOG_API_KEY && !Telemetry.isEnabled()) {
+          return c.json(true)
+        }
         Telemetry.setEnabled(body.enabled)
         return c.json(true)
       },

@@ -36,6 +36,17 @@ export const CodebaseSearchTool = Tool.define(
 
           const apiKey = process.env["MORPH_API_KEY"]
 
+          // kilocode_change start - air-gap: disable codebase search proxy when gateway disabled
+          if (!apiKey && process.env.KILO_DISABLE_GATEWAY) {
+            return {
+              title: `Codebase Search: ${params.query}`,
+              output:
+                "Codebase search unavailable: gateway disabled and no MORPH_API_KEY set. Set MORPH_API_KEY to use codebase search directly.",
+              metadata: { count: 0 },
+            }
+          }
+          // kilocode_change end
+
           // FREE_PERIOD_TODO: Remove proxy fallback — require apiKey, error if missing:
           //   if (!apiKey) return { title: ..., output: "Set MORPH_API_KEY to use codebase search.", metadata: {} }
           const client = new WarpGrepClient({

@@ -312,8 +312,8 @@ export const Info = Schema.Struct({
         description: "Enable the VS Code Agent Manager orchestration tool",
       }),
       // kilocode_change end
-      // kilocode_change start - enable telemetry by default
-      openTelemetry: Schema.Boolean.pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed(true))).annotate({
+      // kilocode_change start - telemetry disabled by default for GTI security
+      openTelemetry: Schema.Boolean.pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed(false))).annotate({
         description: "Enable telemetry. Set to false to opt-out.",
       }),
       // kilocode_change end

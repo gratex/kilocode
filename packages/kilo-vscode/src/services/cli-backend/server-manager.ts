@@ -122,7 +122,15 @@ export class ServerManager {
           KILO_ENABLE_QUESTION_TOOL: "true",
           KILOCODE_FEATURE: "vscode-extension",
           ...indexingEnv,
-          KILO_TELEMETRY_LEVEL: vscode.env.isTelemetryEnabled ? "all" : "off",
+          KILO_TELEMETRY_LEVEL: "off", // kilocode_change - telemetry always off for GTI security
+          // kilocode_change start - air-gap: disable all external connections for GTI deployment
+          KILO_DISABLE_SESSION_INGEST: "1", // no session content sent to ingest server
+          KILO_DISABLE_SHARE: "1", // no session sharing
+          KILO_DISABLE_AUTOUPDATE: "1", // no version check
+          KILO_DISABLE_LSP_DOWNLOAD: "1", // no LSP binary downloads
+          KILO_DISABLE_MODELS_FETCH: "1", // use bundled model snapshot
+          KILO_DISABLE_GATEWAY: "1", // prevent Kilo gateway provider
+          // kilocode_change end
           KILO_APP_NAME: "kilo-code",
           KILO_EDITOR_NAME: vscode.env.appName,
           KILO_PLATFORM: "vscode",
