@@ -143,7 +143,8 @@ function MessageCostDisplay(props: { message: SDKAssistantMessage }) {
     const tk = msg.tokens
     const cr = tk.cache?.read ?? 0
     const cw = tk.cache?.write ?? 0
-    const input = ((tk.input - cr - cw) * (costInfo.input ?? 0)) / 1_000_000
+    // Input cost: use only non-cached input tokens. Cache tokens are charged separately via cache_read/write.
+    const input = (tk.input * (costInfo.input ?? 0)) / 1_000_000
     const output = (tk.output * (costInfo.output ?? 0)) / 1_000_000
     const cacheRead = (cr * (costInfo.cache?.read ?? 0)) / 1_000_000
     const cacheWrite = (cw * (costInfo.cache?.write ?? 0)) / 1_000_000
