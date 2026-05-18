@@ -29,6 +29,8 @@ export function resolveIndexingEnv(folders: readonly WorkspaceFolderLike[] | und
 export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
+  /** Path to the temp file holding the CA bundle PEM content, cleaned up on dispose. */
+  private caBundleTempPath: string | null = null
 
   constructor(private readonly context: vscode.ExtensionContext) {}
 
@@ -105,7 +107,7 @@ export class ServerManager {
       //     from verification, matching what VS Code already does for its own
       //     requests. Users explicitly set that; we don't flip it ourselves.
       //   - Corporate CA cert bundle support: Read from bundled file or VS Code
-      //     settings, pass as KILO_TLS_CA_BUNDLE to CLI subprocess.
+      //     settings, pass as KILO_TLS_CA_BUNDLE_PATH (file path) to CLI subprocess.
       // All are overridable by the user's environment.
       const extraCaCerts = cfg.get<string>("extraCaCerts", "").trim()
       const proxyStrictSSL = vscode.workspace.getConfiguration("http").get<boolean>("proxyStrictSSL", true)
@@ -126,12 +128,30 @@ export class ServerManager {
       }
 
       // Priority: VS Code setting > bundled cert > env vars
+      // Write cert content to a temp file and pass the file path instead of
+      // the full PEM content via env vars. Large cert chains in env vars can
+      // exceed Linux ARG_MAX / MAX_ARG_STRLEN and cause E2BIG on spawn().
       const caBundleEnv: Record<string, string> = {}
       if (extraCaCerts) {
         caBundleEnv["NODE_EXTRA_CA_CERTS"] = extraCaCerts
       }
       if (bundledCertContent) {
-        caBundleEnv["KILO_TLS_CA_BUNDLE"] = bundledCertContent
+        try {
+          // Clean up any previous temp file from a prior server start.
+          if (this.caBundleTempPath) {
+            try { fs.unlinkSync(this.caBundleTempPath) } catch { /* ignore */ }
+          }
+          const tmpDir = this.context.globalStorageUri.fsPath
+          fs.mkdirSync(tmpDir, { recursive: true })
+          const tmpPath = path.join(tmpDir, `kilo-ca-bundle-${crypto.randomBytes(4).toString("hex")}.pem`)
+          fs.writeFileSync(tmpPath, bundledCertContent, "utf8")
+          this.caBundleTempPath = tmpPath
+          caBundleEnv["KILO_TLS_CA_BUNDLE_PATH"] = tmpPath
+        } catch (err) {
+          // If temp file write fails, fall back to env var (may hit E2BIG on large certs)
+          console.warn("[Kilo New] ServerManager: Failed to write CA bundle temp file, falling back to env var:", err)
+          caBundleEnv["KILO_TLS_CA_BUNDLE"] = bundledCertContent
+        }
       }
 
       const serverProcess = spawn(cliPath, ["serve", "--port", "0"], {
@@ -270,6 +290,12 @@ export class ServerManager {
   }
 
   dispose(): void {
+    // Clean up CA bundle temp file
+    if (this.caBundleTempPath) {
+      try { fs.unlinkSync(this.caBundleTempPath) } catch { /* ignore */ }
+      this.caBundleTempPath = null
+    }
+
     if (!this.instance) {
       return
     }

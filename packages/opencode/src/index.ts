@@ -12,20 +12,26 @@
   const orig = globalThis.fetch
 
   // Resolve CA certificate content
+  // KILO_TLS_CA_BUNDLE_PATH takes priority (file path — avoids E2BIG on Linux spawn)
+  // Fallback: KILO_TLS_CA_BUNDLE (PEM content string, backward compat)
+  // Fallback: SSL_CERT_FILE / NODE_EXTRA_CA_CERTS (file path)
+  const caBundlePath = process.env.KILO_TLS_CA_BUNDLE_PATH
   const caBundle = process.env.KILO_TLS_CA_BUNDLE
-  const certPath = process.env.SSL_CERT_FILE ?? process.env.NODE_EXTRA_CA_CERTS
-  const ca = caBundle
-    ? caBundle
-    : certPath
-      ? (() => {
-          try {
-            return Bun.file(certPath)
-          } catch {
-            // File path invalid — skip, rely on rejectUnauthorized:false fallback
-            return undefined
-          }
-        })()
-      : undefined
+  const certPath = caBundlePath ?? process.env.SSL_CERT_FILE ?? process.env.NODE_EXTRA_CA_CERTS
+  const ca = caBundlePath
+    ? Bun.file(caBundlePath)
+    : caBundle
+      ? caBundle
+      : certPath
+        ? (() => {
+            try {
+              return Bun.file(certPath)
+            } catch {
+              // File path invalid — skip, rely on rejectUnauthorized:false fallback
+              return undefined
+            }
+          })()
+        : undefined
 
   const patched = (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
     const existingTls = (init as any)?.tls
