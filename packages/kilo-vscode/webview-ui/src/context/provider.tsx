@@ -8,6 +8,7 @@ import { createContext, useContext, createSignal, createMemo, onCleanup } from "
 import type { ParentComponent, Accessor } from "solid-js"
 import { useVSCode } from "./vscode"
 import type { Provider, ProviderModel, ModelSelection, ExtensionMessage, ProviderAuthState } from "../types/messages"
+import { kiloDebug } from "../utils/kilo-debug"
 import type { ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import { flattenModels, findModel as _findModel, isModelValid as isValid } from "./provider-utils"
 import { KILO_AUTO } from "../../../src/shared/provider-model"
@@ -70,9 +71,9 @@ export const ProviderProvider: ParentComponent = (props) => {
         const m = litellm.models[id]
         return { id, limit: m?.limit, cost: m?.cost, contextLength: m?.contextLength }
       })
-      console.log("[Kilo Debug] providersLoaded: litellm models sample", samples, "total:", Object.keys(litellm.models || {}).length)
+      kiloDebug.log("[Kilo Debug] providersLoaded: litellm models sample", samples, "total:", Object.keys(litellm.models || {}).length)
     } else {
-      console.warn("[Kilo Debug] providersLoaded: no litellm provider found. Available:", Object.keys(message.providers || {}))
+      kiloDebug.warn("[Kilo Debug] providersLoaded: no litellm provider found. Available:", Object.keys(message.providers || {}))
     }
   })
 

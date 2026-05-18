@@ -12,6 +12,7 @@ import { Component, For, Show, createMemo, createSignal, onMount, onCleanup } fr
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { Icon } from "@kilocode/kilo-ui/icon"
+import { kiloDebug } from "../../utils/kilo-debug"
 import { Checkbox } from "@kilocode/kilo-ui/checkbox"
 import { useSession } from "../../context/session"
 import { useProvider } from "../../context/provider"
@@ -45,7 +46,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const cost = createMemo(() => {
     const total = breakdown().reduce((sum, e) => sum + e.cost, 0)
     if (total === 0) return undefined
-    console.log("[Kilo Debug] costBreakdown total", total, breakdown())
+      kiloDebug.log("[Kilo Debug] costBreakdown total", total, breakdown())
     return fmt(total)
   })
 
@@ -65,7 +66,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const context = createMemo(() => {
     const usage = session.contextUsage()
     if (!usage) {
-      console.warn("[Kilo Debug] contextUsage = undefined")
+      kiloDebug.warn("[Kilo Debug] contextUsage = undefined")
       return undefined
     }
     const sel = session.selected()
@@ -74,7 +75,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
     const tokens = usage.tokens
     const pct = usage.percentage !== null ? `${usage.percentage}%` : undefined
     const hasLimit = limit > 0
-    console.log("[Kilo Debug] context", { sel, modelId: model?.id, limit, tokens, pct, hasLimit, modelLimit: model?.limit, modelCost: model?.cost, modelContextLength: model?.contextLength })
+    kiloDebug.log("[Kilo Debug] context", { sel, modelId: model?.id, limit, tokens, pct, hasLimit, modelLimit: model?.limit, modelCost: model?.cost, modelContextLength: model?.contextLength })
     return { tokens, pct, limit, hasLimit }
   })
 
@@ -97,7 +98,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
           break
         }
       }
-      console.log("[Kilo Debug] lastTurn", { msgCost: m.cost, turnCost, input: tk.input, output: tk.output, cacheRead: tk.cache?.read, cacheWrite: tk.cache?.write, partCount: parts.length, stepFinishParts: parts.filter(p => p.type === "step-finish").map(p => ({ cost: (p as any).cost, tokens: (p as any).tokens })) })
+      kiloDebug.log("[Kilo Debug] lastTurn", { msgCost: m.cost, turnCost, input: tk.input, output: tk.output, cacheRead: tk.cache?.read, cacheWrite: tk.cache?.write, partCount: parts.length, stepFinishParts: parts.filter(p => p.type === "step-finish").map(p => ({ cost: (p as any).cost, tokens: (p as any).tokens })) })
       return { tk, cost: turnCost }
     }
     return undefined

@@ -8,6 +8,7 @@
 
 import { createKilo, type KiloProvider, AI_SDK_PROVIDERS, PROMPTS } from "@kilocode/kilo-gateway"
 import { DEFAULT_HEADERS } from "@/kilocode/const"
+import { kiloDebug } from "@/kilocode/util/kilo-debug"
 import { ProviderID, ModelID } from "@/provider/schema"
 import { Effect, Schema } from "effect"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
@@ -189,7 +190,7 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
             const res = await fetch(url, { ...init, tls: { rejectUnauthorized: false } } as RequestInit)
             const costHdr = res.headers.get("x-litellm-response-cost")
             const ct = res.headers.get("content-type") ?? ""
-            console.log("[Kilo Debug] fetch wrapper:", { costHdr, contentType: ct, url: typeof url === "string" ? url.slice(0, 80) : url })
+            kiloDebug.log("[Kilo Debug] fetch wrapper:", { costHdr, contentType: ct, url: typeof url === "string" ? url.slice(0, 80) : url })
             const cost = parseFloat(costHdr ?? "")
             if (!Number.isFinite(cost) || cost === 0) return res
             if (!ct.includes("application/json")) return res
@@ -208,7 +209,7 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
           metadataExtractor: {
             extractMetadata: async ({ parsedBody }: { parsedBody: unknown }) => {
               const cost = (parsedBody as any)?.["_litellm_cost"]
-              console.log("[Kilo Debug] extractMetadata:", { cost, hasLitellmCost: cost !== undefined })
+              kiloDebug.log("[Kilo Debug] extractMetadata:", { cost, hasLitellmCost: cost !== undefined })
               if (typeof cost !== "number" || !Number.isFinite(cost)) return undefined
               return { litellm: { cost_breakdown: { total_cost: cost } } }
             },
@@ -222,7 +223,7 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
                     // Capture cost if present (rare — most LiteLLM proxies don't
                     // include usage.cost in streaming, but check anyway).
                     const costVal = usage.cost
-                    console.log("[Kilo Debug] streamExtractor processChunk usage:", { cost: costVal, prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, cached_tokens: usage.prompt_tokens_details?.cached_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens })
+                    kiloDebug.log("[Kilo Debug] streamExtractor processChunk usage:", { cost: costVal, prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, cached_tokens: usage.prompt_tokens_details?.cached_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens })
                     if (typeof costVal === "number" && Number.isFinite(costVal) && costVal > 0) {
                       streamCost = costVal
                     }
@@ -235,7 +236,7 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
                   }
                 },
                 buildMetadata() {
-                  console.log("[Kilo Debug] streamExtractor buildMetadata, streamCost:", streamCost, "hasUsage:", !!lastUsage)
+                  kiloDebug.log("[Kilo Debug] streamExtractor buildMetadata, streamCost:", streamCost, "hasUsage:", !!lastUsage)
                   const litellm: Record<string, any> = {}
                   if (streamCost !== undefined) {
                     litellm.cost_breakdown = { total_cost: streamCost }

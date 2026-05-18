@@ -13,6 +13,7 @@ import { useProvider } from "./provider"
 import { useConfig } from "./config"
 import { useLanguage } from "./language"
 import { showToast } from "@kilocode/kilo-ui/toast"
+import { kiloDebug } from "../utils/kilo-debug"
 import type {
   SessionInfo,
   Message,
@@ -2331,10 +2332,10 @@ export const SessionProvider: ParentComponent = (props) => {
       if (usage.tokens === 0) continue
       const model = sel ? provider.findModel(sel) : undefined
       const limit = (model?.limit?.input || model?.limit?.context) ?? model?.contextLength
-      console.log("[Kilo Debug] contextUsage calc", { sel, modelId: model?.id, limit, tokens: m.tokens, msgCost: m.cost, modelLimit: model?.limit })
+      kiloDebug.log("[Kilo Debug] contextUsage calc", { sel, modelId: model?.id, limit, tokens: m.tokens, msgCost: m.cost, modelLimit: model?.limit })
       return calcContextUsage(m.tokens, limit, sel?.providerID)
     }
-    console.warn("[Kilo Debug] contextUsage: no assistant messages with tokens found")
+    kiloDebug.warn("[Kilo Debug] contextUsage: no assistant messages with tokens found")
     return undefined
   })
 
