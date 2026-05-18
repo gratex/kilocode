@@ -66,25 +66,39 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
     if (!usage) return undefined
     const sel = session.selected()
     const model = sel ? provider.findModel(sel) : undefined
-    const limit = model?.limit?.context ?? model?.contextLength ?? 0
+    const limit = (model?.limit?.input || model?.limit?.context) ?? model?.contextLength ?? 0
     const tokens = usage.tokens
     const pct = usage.percentage !== null ? `${usage.percentage}%` : undefined
     const hasLimit = limit > 0
     return { tokens, pct, limit, hasLimit }
   })
 
-  // Token breakdown from the last assistant message — only return if at least one value is > 0
-  const tokens = createMemo(() => {
+  // Token breakdown + cost from the last assistant message step-finish part
+  const lastTurn = createMemo(() => {
     const msgs = session.visibleMessages()
     for (let i = msgs.length - 1; i >= 0; i--) {
       const m = msgs[i]
       if (m.role !== "assistant" || !m.tokens) continue
       const tk = m.tokens
       const has = tk.input > 0 || tk.output > 0 || (tk.cache?.write ?? 0) > 0 || (tk.cache?.read ?? 0) > 0
-      if (has) return tk
+      if (!has) continue
+      // Find cost from last step-finish part of this message
+      const parts = session.getParts(m.id)
+      let turnCost: number | undefined
+      for (let j = parts.length - 1; j >= 0; j--) {
+        const p = parts[j]
+        if (p.type === "step-finish" && typeof (p as any).cost === "number") {
+          turnCost = (p as any).cost as number
+          break
+        }
+      }
+      return { tk, cost: turnCost }
     }
     return undefined
   })
+
+  const tokens = createMemo(() => lastTurn()?.tk)
+  const lastTurnCost = createMemo(() => lastTurn()?.cost)
 
   // Cumulative token tracking across all assistant messages
   const cumulativeTokens = createMemo(() => {
@@ -244,7 +258,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
           <Show when={tokens()}>
             {(tk) => (
               <div class="task-header-tokens">
-                <span class="task-header-tokens-label">Tokens</span>
+                <span class="task-header-tokens-label">Last turn</span>
                 <Show when={tk().input > 0}>
                   <span class="task-header-tokens-value">
                     <Icon name="arrow-up" size="small" />
@@ -267,6 +281,11 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
                   <span class="task-header-tokens-value">
                     <Icon name="arrow-down-to-line" size="small" />
                     cache {fmtNum(tk().cache!.read)}
+                  </span>
+                </Show>
+                <Show when={lastTurnCost() !== undefined && lastTurnCost()! > 0}>
+                  <span class="task-header-tokens-value" style={{ "margin-left": "4px" }}>
+                    {fmt(lastTurnCost()!)}
                   </span>
                 </Show>
               </div>

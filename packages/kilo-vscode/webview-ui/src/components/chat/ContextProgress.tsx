@@ -30,7 +30,7 @@ export const ContextProgress: Component = () => {
 
     const sel = session.selected()
     const model = sel ? provider.findModel(sel) : undefined
-    let limit = model?.limit?.context ?? model?.contextLength ?? 0
+    let limit = (model?.limit?.input || model?.limit?.context) ?? model?.contextLength ?? 0
     const output = model?.limit?.output ?? 0
 
     // If no limit found and provider is litellm, default to 128K

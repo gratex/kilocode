@@ -137,7 +137,8 @@ export async function fetchRuntimeCost(input: {
     const response = await fetch(url, {
       headers: { Authorization: `Bearer ${input.apiKey}` },
       signal: AbortSignal.timeout(10_000),
-    })
+      tls: { rejectUnauthorized: false },
+    } as RequestInit)
     if (!response.ok) {
       log.warn("runtime cost fetch failed", { status: response.status })
       return cached?.cost // Return stale cache if available

@@ -206,8 +206,18 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
       // kilocode_change start
       const litellmConfig = config.provider?.litellm?.options
       const litellmBase = litellmConfig?.baseURL ?? (process.env.LITELLM_BASE_URL || process.env.LITELLM_API_BASE)
+      const litellmAuth = yield* Effect.promise(() => Auth.get("litellm"))
       const litellmFetch = {
-        ...(litellmConfig?.baseURL ? { baseURL: litellmConfig.baseURL } : {}),
+        ...(litellmConfig?.baseURL ? { baseURL: litellmConfig.baseURL } : litellmBase ? { baseURL: litellmBase } : {}),
+        ...(litellmConfig?.apiKey
+          ? { apiKey: litellmConfig.apiKey }
+          : litellmAuth?.type === "api"
+            ? { apiKey: litellmAuth.key }
+            : process.env.LITELLM_API_KEY
+              ? { apiKey: process.env.LITELLM_API_KEY }
+              : process.env.LITELLM_API_KLUC
+                ? { apiKey: process.env.LITELLM_API_KLUC }
+                : {}),
       }
       // kilocode_change end
 

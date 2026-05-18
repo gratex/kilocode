@@ -256,18 +256,26 @@ export namespace ModelCache {
     const baseURL = options.baseURL
     const apiKey = options.apiKey
 
+    log.info("litellm fetchLitellmModels called", { hasBaseURL: !!baseURL, hasApiKey: !!apiKey, baseURL })
+
     if (!baseURL || !apiKey) {
-      log.debug("no baseURL or apiKey for litellm, skipping model fetch")
+      log.warn("litellm fetchLitellmModels: missing baseURL or apiKey — skipping", { hasBaseURL: !!baseURL, hasApiKey: !!apiKey })
       return {}
     }
 
+    // Bun-compatible fetch options: disable TLS verification for self-signed / corporate CA certs.
+    // LiteLLM proxies are often deployed with custom CAs that Bun's TLS stack rejects by default.
+    const tlsOpts = { tls: { rejectUnauthorized: false } } as RequestInit
+
     // 1. Fetch model list from /models
     const modelsUrl = `${baseURL.replace(/\/+$/, "")}/models`
+    log.info("litellm fetching model list", { url: modelsUrl })
     const modelsResponse = await fetch(modelsUrl, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: AbortSignal.timeout(10_000),
+      ...tlsOpts,
     }).catch((err) => {
-      log.error("litellm model list fetch failed", { err })
+      log.error("litellm model list fetch failed", { err: String(err) })
       return null
     })
 
@@ -282,15 +290,19 @@ export namespace ModelCache {
     }
     const modelList = modelsJson.data ?? modelsJson.data_list ?? []
     const filteredModels = modelList.filter((m) => m.object === "model" || !m.object)
+    log.info("litellm model list fetched", { total: modelList.length, filtered: filteredModels.length })
 
     // 2. Fetch model info for costs from /v1/model/info
     let modelInfoMap: Record<string, any> = {}
     try {
       const infoUrl = `${baseURL.replace(/\/+$/, "")}/v1/model/info`
+      log.info("litellm fetching model info", { url: infoUrl })
       const infoResponse = await fetch(infoUrl, {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(10_000),
+        ...tlsOpts,
       })
+      log.info("litellm model info response", { status: infoResponse.status, ok: infoResponse.ok })
       if (infoResponse.ok) {
         const infoJson = (await infoResponse.json()) as {
           data?: Array<{ model_name: string; model_info?: Record<string, any>; litellm_params?: Record<string, any> }>
@@ -300,9 +312,10 @@ export namespace ModelCache {
             modelInfoMap[entry.model_name] = entry
           }
         }
+        log.info("litellm model info loaded", { count: Object.keys(modelInfoMap).length, models: Object.keys(modelInfoMap) })
       }
     } catch (err) {
-      log.warn("litellm model info fetch failed", { err })
+      log.warn("litellm model info fetch failed", { err: String(err) })
     }
 
     // 3. Map to internal format
@@ -365,6 +378,10 @@ export namespace ModelCache {
       }
     }
 
+    const sampleModels = Object.entries(models).slice(0, 3).map(([id, m]: [string, any]) => ({
+      id, limit: m.limit, costInput: m.cost?.input, costOutput: m.cost?.output
+    }))
+    log.info("litellm models built", { total: Object.keys(models).length, sample: sampleModels })
     return models
   }
   // kilocode_change end

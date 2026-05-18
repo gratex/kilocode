@@ -2330,7 +2330,7 @@ export const SessionProvider: ParentComponent = (props) => {
       const usage = calcContextUsage(m.tokens, undefined, sel?.providerID)
       if (usage.tokens === 0) continue
       const model = sel ? provider.findModel(sel) : undefined
-      const limit = model?.limit?.context ?? model?.contextLength
+      const limit = (model?.limit?.input || model?.limit?.context) ?? model?.contextLength
       return calcContextUsage(m.tokens, limit, sel?.providerID)
     }
     return undefined

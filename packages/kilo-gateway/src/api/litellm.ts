@@ -35,7 +35,8 @@ export async function fetchLiteLLMKeyInfo(baseURL: string, apiKey: string): Prom
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(10_000),
-    })
+      tls: { rejectUnauthorized: false },
+    } as RequestInit)
 
     if (!response.ok) {
       console.warn(`Failed to fetch LiteLLM key info: ${response.status}`)
@@ -90,7 +91,8 @@ export async function fetchLiteLLMModelCost(
         "Content-Type": "application/json",
       },
       signal: AbortSignal.timeout(10_000),
-    })
+      tls: { rejectUnauthorized: false },
+    } as RequestInit)
 
     if (!response.ok) {
       console.warn(`Failed to fetch LiteLLM model info: ${response.status}`)
