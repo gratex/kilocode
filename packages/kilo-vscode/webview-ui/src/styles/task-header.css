@@ -2,6 +2,62 @@
    Task Header Todos
    ============================================ */
 
+/* ============================================
+   Session Activity Indicator
+   ============================================ */
+
+[data-slot="session-activity"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--kilo-font-size-12);
+  white-space: nowrap;
+
+  [data-activity] {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    color: var(--text-weak);
+    font-variant-numeric: tabular-nums;
+  }
+
+  [data-activity="running"] {
+    color: var(--vscode-testing-iconPassed, #5cb85c);
+  }
+
+  [data-activity="waiting"] {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+    font-weight: 600;
+    animation: activity-pulse 2s ease-in-out infinite;
+  }
+
+  [data-activity="retry"] {
+    color: var(--vscode-editorWarning-foreground, #cca700);
+  }
+
+  [data-activity="offline"] {
+    color: var(--vscode-errorForeground, #f14c4c);
+  }
+
+  [data-activity="idle"] {
+    color: var(--text-weak);
+  }
+}
+
+@keyframes activity-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ============================================
+   Task Header Todos (original)
+   ============================================ */
+
 [data-component="task-header-todos"] {
   border-bottom: 1px solid var(--border-weak-base);
   background-color: var(--background-base);
