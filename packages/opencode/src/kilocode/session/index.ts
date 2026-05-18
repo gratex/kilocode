@@ -191,7 +191,11 @@ export namespace KiloSession {
       | undefined
     if (litellmCostBreakdown && litellmCostBreakdown.total_cost !== undefined) {
       const cost = num(litellmCostBreakdown.total_cost)
+      log.info("litellm providerCost from cost_breakdown", { cost, breakdown: litellmCostBreakdown })
       if (cost !== undefined) return cost
+    }
+    if (input.providerID === "litellm") {
+      log.info("litellm providerCost: no cost_breakdown in metadata", { litellmMeta: input.metadata?.["litellm"] })
     }
 
     // 1. OpenRouter chat completions

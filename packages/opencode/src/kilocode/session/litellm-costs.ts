@@ -152,27 +152,29 @@ export async function fetchRuntimeCost(input: {
     const mi = entry?.model_info
     if (!mi) return cached?.cost
 
+    // LiteLLM returns 0 for unknown cost fields. Use || so 0 falls through
+    // to the hardcoded default, which has correct per-token costs for known models.
+    const defaultCost = findDefaultCost(input.modelId)
     const cost: CostInfo = {
-      input: mi.input_cost_per_token ?? 0,
-      output: mi.output_cost_per_token ?? 0,
+      input: (mi.input_cost_per_token || undefined) ?? defaultCost?.input ?? 0,
+      output: (mi.output_cost_per_token || undefined) ?? defaultCost?.output ?? 0,
       cache: {
-        read: mi.cache_read_input_token_cost ?? 0,
-        write: mi.cache_creation_input_token_cost ?? 0,
+        read: (mi.cache_read_input_token_cost || undefined) ?? defaultCost?.cache?.read ?? 0,
+        write: (mi.cache_creation_input_token_cost || undefined) ?? defaultCost?.cache?.write ?? 0,
       },
     }
 
     // Add above-200k costs if present
-    if (
-      mi.input_cost_per_token_above_200k_tokens ??
-      mi.output_cost_per_token_above_200k_tokens
-    ) {
+    const has200kApi = (mi.input_cost_per_token_above_200k_tokens || undefined) ?? (mi.output_cost_per_token_above_200k_tokens || undefined)
+    const defaultOver200k = defaultCost?.experimentalOver200K
+    if (has200kApi || defaultOver200k) {
       cost.experimentalOver200K = {
-        input: mi.input_cost_per_token_above_200k_tokens ?? cost.input,
-        output: mi.output_cost_per_token_above_200k_tokens ?? cost.output,
+        input: (mi.input_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.input ?? cost.input,
+        output: (mi.output_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.output ?? cost.output,
         cache: {
           // Note: LiteLLM typo — singular "token" not "tokens"
-          read: mi.cache_read_input_token_cost_above_200k_token ?? cost.cache.read,
-          write: mi.cache_creation_input_token_cost_above_200k_tokens ?? cost.cache.write,
+          read: (mi.cache_read_input_token_cost_above_200k_token || undefined) ?? defaultOver200k?.cache?.read ?? cost.cache.read,
+          write: (mi.cache_creation_input_token_cost_above_200k_tokens || undefined) ?? defaultOver200k?.cache?.write ?? cost.cache.write,
         },
       }
     }

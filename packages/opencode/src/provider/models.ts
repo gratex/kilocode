@@ -218,6 +218,7 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
               : process.env.LITELLM_API_KLUC
                 ? { apiKey: process.env.LITELLM_API_KLUC }
                 : {}),
+        ...(litellmConfig?.httpBaseURL ? { httpBaseURL: litellmConfig.httpBaseURL } : process.env.LITELLM_HTTP_BASE_URL ? { httpBaseURL: process.env.LITELLM_HTTP_BASE_URL } : {}),
       }
       // kilocode_change end
 

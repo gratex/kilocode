@@ -52,6 +52,7 @@ export {
   fetchLiteLLMKeyInfo,
   calculateLiteLLMBudgetStatus,
   fetchLiteLLMModelCost,
+  litellmFetch,
   type LiteLLMKeyInfo,
   type LiteLLMModelCost,
 } from "./api/litellm.js"

@@ -34,6 +34,14 @@ export const CustomProviderConfigSchema = z
           .refine((value) => value.startsWith("http://") || value.startsWith("https://"), {
             message: INVALID_BASE_URL,
           }),
+        httpBaseURL: z
+          .string()
+          .trim()
+          .url()
+          .refine((value) => value.startsWith("http://"), {
+            message: "HTTP base URL must start with http://",
+          })
+          .optional(),
         headers: z.record(z.string().trim().min(1), z.string().trim().min(1)).optional(),
       })
       .strict(),
@@ -58,6 +66,7 @@ export type SanitizedProviderConfig = {
   env?: string[]
   options: {
     baseURL: string
+    httpBaseURL?: string
     headers?: Record<string, string>
   }
   models: Record<string, { name: string; reasoning?: true; variants?: Record<string, VariantConfig> }>
@@ -123,6 +132,7 @@ export function normalizeCustomProviderConfig(
     ...(config.env ? { env: config.env.map((item) => item.trim()) } : {}),
     options: {
       baseURL: config.options.baseURL.trim(),
+      ...(config.options.httpBaseURL ? { httpBaseURL: config.options.httpBaseURL.trim() } : {}),
       ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
     },
     models: Object.fromEntries(

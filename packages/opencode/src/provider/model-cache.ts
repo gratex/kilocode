@@ -1,8 +1,9 @@
 // kilocode_change - new file
-import { fetchKiloModels, type KiloModelsResult } from "@kilocode/kilo-gateway"
+import { fetchKiloModels, type KiloModelsResult, litellmFetch } from "@kilocode/kilo-gateway"
 import { Config } from "../config/config"
 import { Auth } from "../auth"
 import * as Log from "@opencode-ai/core/util/log"
+import { findDefaultCost } from "../kilocode/session/litellm-costs"
 
 export namespace ModelCache {
   const log = Log.create({ service: "model-cache" })
@@ -263,63 +264,69 @@ export namespace ModelCache {
       return {}
     }
 
-    // Bun-compatible fetch options: disable TLS verification for self-signed / corporate CA certs.
-    // LiteLLM proxies are often deployed with custom CAs that Bun's TLS stack rejects by default.
-    const tlsOpts = { tls: { rejectUnauthorized: false } } as RequestInit
+    const isHttps = baseURL.startsWith("https://")
+    const result = await fetchLitellmModelsInner(baseURL, apiKey, isHttps)
+    if (Object.keys(result).length > 0) return result
+
+    const httpBaseURL = options.httpBaseURL as string | undefined
+    if (httpBaseURL) {
+      log.info("litellm primary URL failed, trying httpBaseURL fallback", { httpBaseURL })
+      const httpResult = await fetchLitellmModelsInner(httpBaseURL, apiKey, false)
+      if (Object.keys(httpResult).length > 0) return httpResult
+    }
+
+    log.error("litellm all fetch approaches failed, returning empty models")
+    return {}
+  }
+
+  async function fetchLitellmModelsInner(baseURL: string, apiKey: string, disableTlsVerify: boolean): Promise<Record<string, any>> {
+    const base = baseURL.replace(/\/+$/, "")
 
     // 1. Fetch model list from /models
-    const modelsUrl = `${baseURL.replace(/\/+$/, "")}/models`
-    log.info("litellm fetching model list", { url: modelsUrl })
-    const modelsResponse = await fetch(modelsUrl, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(10_000),
-      ...tlsOpts,
-    }).catch((err) => {
-      log.error("litellm model list fetch failed", { err: String(err) })
-      return null
-    })
+    const modelsUrl = `${base}/models`
+    log.info("litellm fetching model list", { url: modelsUrl, disableTlsVerify })
+    const modelsJson = await litellmFetch(modelsUrl, apiKey, disableTlsVerify) as {
+      data?: Array<{ id: string; object?: string; owned_by?: string }>
+      data_list?: Array<{ id: string; object?: string; owned_by?: string }>
+    } | null
 
-    if (!modelsResponse || !modelsResponse.ok) {
-      log.error("litellm model list fetch failed", { status: modelsResponse?.status })
+    if (!modelsJson) {
+      log.error("litellm model list fetch failed (native + curl)")
       return {}
     }
 
-    const modelsJson = (await modelsResponse.json()) as {
-      data?: Array<{ id: string; object?: string; owned_by?: string }>
-      data_list?: Array<{ id: string; object?: string; owned_by?: string }>
-    }
     const modelList = modelsJson.data ?? modelsJson.data_list ?? []
-    const filteredModels = modelList.filter((m) => m.object === "model" || !m.object)
+    const filteredModels = modelList.filter((m) => (m.object === "model" || !m.object) && !m.id.startsWith("@"))
     log.info("litellm model list fetched", { total: modelList.length, filtered: filteredModels.length })
 
     // 2. Fetch model info for costs from /v1/model/info
     let modelInfoMap: Record<string, any> = {}
-    try {
-      const infoUrl = `${baseURL.replace(/\/+$/, "")}/v1/model/info`
-      log.info("litellm fetching model info", { url: infoUrl })
-      const infoResponse = await fetch(infoUrl, {
-        headers: { Authorization: `Bearer ${apiKey}` },
-        signal: AbortSignal.timeout(10_000),
-        ...tlsOpts,
-      })
-      log.info("litellm model info response", { status: infoResponse.status, ok: infoResponse.ok })
-      if (infoResponse.ok) {
-        const infoJson = (await infoResponse.json()) as {
-          data?: Array<{ model_name: string; model_info?: Record<string, any>; litellm_params?: Record<string, any> }>
-        }
-        for (const entry of infoJson.data ?? []) {
-          if (entry.model_name) {
-            modelInfoMap[entry.model_name] = entry
-          }
-        }
-        log.info("litellm model info loaded", { count: Object.keys(modelInfoMap).length, models: Object.keys(modelInfoMap) })
+    const infoUrl = `${base}/v1/model/info`
+    const infoJson = await litellmFetch(infoUrl, apiKey, disableTlsVerify) as {
+      data?: Array<{ model_name: string; model_info?: Record<string, any>; litellm_params?: Record<string, any> }>
+    } | null
+    if (infoJson) {
+      for (const entry of infoJson.data ?? []) {
+        if (entry.model_name) modelInfoMap[entry.model_name] = entry
       }
-    } catch (err) {
-      log.warn("litellm model info fetch failed", { err: String(err) })
+      const sampleKey = Object.keys(modelInfoMap)[0]
+      if (sampleKey) {
+        const sampleMi = modelInfoMap[sampleKey]?.model_info
+        log.info("litellm model info sample", {
+          model_name: sampleKey,
+          max_input_tokens: sampleMi?.max_input_tokens,
+          input_cost: sampleMi?.input_cost_per_token,
+          output_cost: sampleMi?.output_cost_per_token,
+        })
+      }
+      log.info("litellm model info loaded", { count: Object.keys(modelInfoMap).length, models: Object.keys(modelInfoMap) })
+    } else {
+      log.warn("litellm model info fetch failed (native + curl)")
     }
 
     // 3. Map to internal format
     const models: Record<string, any> = {}
+    let matchCount = 0
     for (const model of filteredModels) {
       // Try exact match first, then case-insensitive partial
       let modelInfo = modelInfoMap[model.id]
@@ -334,24 +341,42 @@ export namespace ModelCache {
       }
 
       const mi = modelInfo?.model_info ?? {}
-      const costs = {
-        input: mi.input_cost_per_token ?? 0,
-        output: mi.output_cost_per_token ?? 0,
-        cache: {
-          read: mi.cache_read_input_token_cost ?? mi.prompt_cache_cost_per_token ?? 0,
-          write: mi.cache_creation_input_token_cost ?? mi.prompt_cache_write_cost_per_token ?? 0,
-        },
+      if (modelInfo) matchCount++
+      // LiteLLM returns 0 for unknown cost/limit fields (not null/undefined).
+      // Use || (not ??) so that 0 from the API is treated as "not set" and
+      // falls through to the next source or the hardcoded default.
+      const apiCost = {
+        input: mi.input_cost_per_token || undefined,
+        output: mi.output_cost_per_token || undefined,
+        cache_read: mi.cache_read_input_token_cost || mi.prompt_cache_cost_per_token || undefined,
+        cache_write: mi.cache_creation_input_token_cost || mi.prompt_cache_write_cost_per_token || undefined,
       }
 
-      const over200k = (mi.input_cost_per_token_above_200k_tokens ?? mi.output_cost_per_token_above_200k_tokens) ? {
-        input: mi.input_cost_per_token_above_200k_tokens ?? costs.input,
-        output: mi.output_cost_per_token_above_200k_tokens ?? costs.output,
-        cache: {
-          // Note: LiteLLM has a typo — singular "token" not "tokens" for cache_read
-          read: mi.cache_read_input_token_cost_above_200k_token ?? costs.cache.read,
-          write: mi.cache_creation_input_token_cost_above_200k_tokens ?? costs.cache.write,
-        },
+      // Fallback to hardcoded known costs when the API returns 0 for everything.
+      // LiteLLM's model_info key-based lookup may not find a match for custom
+      // or newly-added models, leaving all cost fields as 0.
+      const defaultCost = findDefaultCost(model.id)
+      const cost = {
+        input: apiCost.input ?? defaultCost?.input ?? 0,
+        output: apiCost.output ?? defaultCost?.output ?? 0,
+        cache_read: apiCost.cache_read ?? defaultCost?.cache?.read ?? 0,
+        cache_write: apiCost.cache_write ?? defaultCost?.cache?.write ?? 0,
+      }
+
+      const over200kApi = (mi.input_cost_per_token_above_200k_tokens || undefined) ?? (mi.output_cost_per_token_above_200k_tokens || undefined)
+      const defaultOver200k = defaultCost?.experimentalOver200K
+      const over200k = (over200kApi || defaultOver200k) ? {
+        input: (mi.input_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.input ?? cost.input,
+        output: (mi.output_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.output ?? cost.output,
+        cache_read: (mi.cache_read_input_token_cost_above_200k_token || undefined) ?? defaultOver200k?.cache?.read ?? cost.cache_read,
+        cache_write: (mi.cache_creation_input_token_cost_above_200k_tokens || undefined) ?? defaultOver200k?.cache?.write ?? cost.cache_write,
       } : undefined
+
+      // Same || pattern for limits: LiteLLM returns 0 when unknown, but 0 is
+      // never a valid context window size. undefined signals "not set" which
+      // lets downstream code apply per-model defaults.
+      const apiMaxInput = mi.max_input_tokens || mi.max_tokens || undefined
+      const apiMaxOutput = mi.max_output_tokens || undefined
 
       models[model.id] = {
         id: model.id,
@@ -362,10 +387,11 @@ export namespace ModelCache {
         reasoning: mi.supports_reasoning ?? false,
         temperature: true,
         tool_call: true,
-        cost: { ...costs, experimentalOver200K: over200k },
+        cost: { ...cost, context_over_200k: over200k },
         limit: {
-          context: mi.max_input_tokens ?? mi.max_tokens ?? 128000,
-          output: mi.max_output_tokens ?? 4096,
+          input: apiMaxInput,
+          context: apiMaxInput ?? 128000,
+          output: apiMaxOutput ?? 4096,
         },
         options: {},
         modalities: {
@@ -378,8 +404,15 @@ export namespace ModelCache {
       }
     }
 
-    const sampleModels = Object.entries(models).slice(0, 3).map(([id, m]: [string, any]) => ({
-      id, limit: m.limit, costInput: m.cost?.input, costOutput: m.cost?.output
+    log.info("litellm model-info match stats", { total: filteredModels.length, matched: matchCount, unmatched: filteredModels.length - matchCount })
+
+    const sampleModels = Object.entries(models).slice(0, 5).map(([id, m]: [string, any]) => ({
+      id,
+      limit: m.limit,
+      costInput: m.cost?.input,
+      costOutput: m.cost?.output,
+      cacheRead: m.cost?.cache_read,
+      hasDefaultCost: !!findDefaultCost(id),
     }))
     log.info("litellm models built", { total: Object.keys(models).length, sample: sampleModels })
     return models
@@ -483,11 +516,14 @@ export namespace ModelCache {
       const env = process.env
       if (env.LITELLM_API_KEY || env.LITELLM_API_KLUC) options.apiKey = env.LITELLM_API_KEY || env.LITELLM_API_KLUC
       if (env.LITELLM_BASE_URL || env.LITELLM_API_BASE) options.baseURL = env.LITELLM_BASE_URL || env.LITELLM_API_BASE
+      if ((providerConfig?.options as any)?.httpBaseURL) options.httpBaseURL = (providerConfig!.options as any).httpBaseURL
+      if (env.LITELLM_HTTP_BASE_URL) options.httpBaseURL = env.LITELLM_HTTP_BASE_URL
 
       log.debug("litellm auth options resolved", {
         providerID,
         hasKey: !!options.apiKey,
         hasBaseURL: !!options.baseURL,
+        hasHttpBaseURL: !!options.httpBaseURL,
       })
     }
     // kilocode_change end

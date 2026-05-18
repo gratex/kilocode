@@ -400,6 +400,18 @@ export const getUsage = (input: {
     provider: input.provider,
     providerID: input.model.providerID,
   })
+  // Debug: log cost calculation for litellm
+  if (input.model.providerID === "litellm") {
+    log.info("litellm getUsage", {
+      modelId: input.model.id,
+      reported,
+      modelCost: input.model.cost,
+      modelLimit: input.model.limit,
+      metadataKeys: input.metadata ? Object.keys(input.metadata) : [],
+      litellmMeta: input.metadata?.["litellm"],
+      tokens: { input: tokens.input, output: tokens.output, cacheRead: tokens.cache.read, cacheWrite: tokens.cache.write },
+    })
+  }
   if (reported !== undefined) return { cost: safe(reported), tokens }
   // kilocode_change end
 

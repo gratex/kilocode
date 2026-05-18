@@ -181,18 +181,17 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
         options: {
           ...(sdkBaseURL ? { baseURL: sdkBaseURL } : {}),
           ...(hasKey ? {} : { apiKey: "anonymous" }),
-          // Intercept fetch to capture x-litellm-response-cost header.
-          // provider.ts wraps options["fetch"] as customFetch and passes modified init
-          // (with abort signals, timeout, etc.) through — so this receives the full opts.
-          // For non-streaming JSON responses: inject cost into body as _litellm_cost so
-          // metadataExtractor can read it from parsedBody.
-          // For streaming (text/event-stream): cost falls back to token-based calculation.
+          // Intercept fetch to: (a) disable TLS verification for self-signed certs,
+          // (b) capture x-litellm-response-cost header for non-streaming responses.
+          // For streaming, the header is 0.0 (cost unknown until stream ends), so
+          // cost is extracted from SSE chunks via createStreamExtractor below.
           fetch: async (url: any, init?: any) => {
             const res = await fetch(url, { ...init, tls: { rejectUnauthorized: false } } as RequestInit)
             const costHdr = res.headers.get("x-litellm-response-cost")
-            const cost = parseFloat(costHdr ?? "")
-            if (!Number.isFinite(cost)) return res
             const ct = res.headers.get("content-type") ?? ""
+            console.log("[Kilo Debug] fetch wrapper:", { costHdr, contentType: ct, url: typeof url === "string" ? url.slice(0, 80) : url })
+            const cost = parseFloat(costHdr ?? "")
+            if (!Number.isFinite(cost) || cost === 0) return res
             if (!ct.includes("application/json")) return res
             const text = await res.text()
             let body: any
@@ -200,17 +199,58 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
             body["_litellm_cost"] = cost
             return new Response(JSON.stringify(body), { status: res.status, headers: res.headers })
           },
-          // metadataExtractor reads _litellm_cost injected by fetch wrapper above.
+          // metadataExtractor captures cost from both non-streaming and streaming responses.
+          // Non-streaming: reads _litellm_cost injected by fetch wrapper from x-litellm-response-cost header.
+          // Streaming: createStreamExtractor parses usage.cost from the final SSE chunk
+          // (available when LiteLLM proxy has include_cost_in_streaming_usage: true).
+          // When neither source provides cost, Session.getUsage() falls back to
+          // token-based calculation using model costs from /v1/model/info.
           metadataExtractor: {
             extractMetadata: async ({ parsedBody }: { parsedBody: unknown }) => {
               const cost = (parsedBody as any)?.["_litellm_cost"]
+              console.log("[Kilo Debug] extractMetadata:", { cost, hasLitellmCost: cost !== undefined })
               if (typeof cost !== "number" || !Number.isFinite(cost)) return undefined
               return { litellm: { cost_breakdown: { total_cost: cost } } }
             },
-            createStreamExtractor: () => ({
-              processChunk(_chunk: unknown) {},
-              buildMetadata() { return undefined },
-            }),
+            createStreamExtractor: () => {
+              let streamCost: number | undefined
+              let lastUsage: Record<string, any> | undefined
+              return {
+                processChunk(chunk: unknown) {
+                  const usage = (chunk as any)?.usage
+                  if (usage) {
+                    // Capture cost if present (rare — most LiteLLM proxies don't
+                    // include usage.cost in streaming, but check anyway).
+                    const costVal = usage.cost
+                    console.log("[Kilo Debug] streamExtractor processChunk usage:", { cost: costVal, prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, cached_tokens: usage.prompt_tokens_details?.cached_tokens, cache_creation_input_tokens: usage.cache_creation_input_tokens })
+                    if (typeof costVal === "number" && Number.isFinite(costVal) && costVal > 0) {
+                      streamCost = costVal
+                    }
+                    // Always capture the last usage object from the stream.
+                    // The final SSE chunk (before [DONE]) contains the full usage
+                    // with prompt_tokens_details.cached_tokens and
+                    // cache_creation_input_tokens, which getUsage() reads via
+                    // input.metadata?.["litellm"]?.["usage"].
+                    lastUsage = usage
+                  }
+                },
+                buildMetadata() {
+                  console.log("[Kilo Debug] streamExtractor buildMetadata, streamCost:", streamCost, "hasUsage:", !!lastUsage)
+                  const litellm: Record<string, any> = {}
+                  if (streamCost !== undefined) {
+                    litellm.cost_breakdown = { total_cost: streamCost }
+                  }
+                  if (lastUsage) {
+                    // Store usage so session.ts getUsage() can read cache tokens
+                    // via input.metadata?.["litellm"]?.["usage"]?.["prompt_tokens_details"]?.["cached_tokens"]
+                    // and input.metadata?.["litellm"]?.["usage"]?.["cache_creation_input_tokens"]
+                    litellm.usage = lastUsage
+                  }
+                  if (Object.keys(litellm).length === 0) return undefined
+                  return { litellm }
+                },
+              }
+            },
           },
         },
         async getModel(sdk: any, modelID: string) {

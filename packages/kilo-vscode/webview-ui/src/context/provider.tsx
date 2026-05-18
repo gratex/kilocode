@@ -61,6 +61,19 @@ export const ProviderProvider: ParentComponent = (props) => {
     setDefaultSelection(message.defaultSelection)
     setAuthMethods(message.authMethods)
     setAuthStates(message.authStates)
+
+    // Debug: log provider model data
+    const litellm = message.providers?.["litellm"]
+    if (litellm) {
+      const sampleModelIds = Object.keys(litellm.models || {}).slice(0, 3)
+      const samples = sampleModelIds.map(id => {
+        const m = litellm.models[id]
+        return { id, limit: m?.limit, cost: m?.cost, contextLength: m?.contextLength }
+      })
+      console.log("[Kilo Debug] providersLoaded: litellm models sample", samples, "total:", Object.keys(litellm.models || {}).length)
+    } else {
+      console.warn("[Kilo Debug] providersLoaded: no litellm provider found. Available:", Object.keys(message.providers || {}))
+    }
   })
 
   onCleanup(unsubscribe)

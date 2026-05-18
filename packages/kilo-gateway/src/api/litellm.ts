@@ -1,3 +1,6 @@
+import { litellmFetch } from "./litellm-fetch.js"
+export { litellmFetch }
+
 export interface LiteLLMKeyInfo {
   key: string
   info: {
@@ -24,36 +27,13 @@ export interface LiteLLMModelCost {
   cache_creation_input_token_cost?: number
 }
 
-/**
- * Fetch LiteLLM key info from the proxy
- */
 export async function fetchLiteLLMKeyInfo(baseURL: string, apiKey: string): Promise<LiteLLMKeyInfo | null> {
-  try {
-    const response = await fetch(`${baseURL}/key/info`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(10_000),
-      tls: { rejectUnauthorized: false },
-    } as RequestInit)
-
-    if (!response.ok) {
-      console.warn(`Failed to fetch LiteLLM key info: ${response.status}`)
-      return null
-    }
-
-    const data = (await response.json()) as LiteLLMKeyInfo
-    return data
-  } catch (error) {
-    console.warn("Error fetching LiteLLM key info:", error)
-    return null
-  }
+  const url = `${baseURL.replace(/\/+$/, "")}/key/info`
+  const data = await litellmFetch(url, apiKey, true)
+  if (!data) return null
+  return data as LiteLLMKeyInfo
 }
 
-/**
- * Calculate budget status from key info
- */
 export function calculateLiteLLMBudgetStatus(keyInfo: LiteLLMKeyInfo): {
   spent: number
   remaining: number
@@ -76,76 +56,41 @@ export function calculateLiteLLMBudgetStatus(keyInfo: LiteLLMKeyInfo): {
   }
 }
 
-/**
- * Fetch model cost info from LiteLLM proxy
- */
 export async function fetchLiteLLMModelCost(
   baseURL: string,
   apiKey: string,
   modelName: string,
 ): Promise<LiteLLMModelCost | null> {
-  try {
-    const response = await fetch(`${baseURL}/v1/model/info`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      signal: AbortSignal.timeout(10_000),
-      tls: { rejectUnauthorized: false },
-    } as RequestInit)
+  const url = `${baseURL.replace(/\/+$/, "")}/v1/model/info`
+  const data = await litellmFetch(url, apiKey, true)
+  if (!data) return null
 
-    if (!response.ok) {
-      console.warn(`Failed to fetch LiteLLM model info: ${response.status}`)
-      return null
-    }
+  const entries: Array<{ model_name: string; model_info?: Record<string, any> }> = data?.data ?? []
+  const entryMap: Record<string, any> = {}
+  for (const entry of entries) {
+    if (entry.model_name) entryMap[entry.model_name] = entry.model_info ?? {}
+  }
 
-    const data = (await response.json()) as {
-      data?: {
-        model_info?: Record<
-          string,
-          {
-            input_cost_per_token?: number
-            output_cost_per_token?: number
-            cache_read_input_token_cost?: number
-            cache_creation_input_token_cost?: number
-          }
-        >
+  let modelCosts = entryMap[modelName]
+  if (!modelCosts) {
+    const lowerModelName = modelName.toLowerCase()
+    for (const [key, value] of Object.entries(entryMap)) {
+      if (key.toLowerCase() === lowerModelName) {
+        modelCosts = value
+        break
       }
     }
+  }
 
-    const modelInfo = data?.data?.model_info
-    if (!modelInfo) {
-      console.warn("No model info found in response")
-      return null
-    }
-
-    // Try exact match first
-    let modelCosts = modelInfo[modelName]
-
-    // Then try case-insensitive partial match
-    if (!modelCosts) {
-      const lowerModelName = modelName.toLowerCase()
-      for (const [key, value] of Object.entries(modelInfo)) {
-        if (key.toLowerCase() === lowerModelName) {
-          modelCosts = value
-          break
-        }
-      }
-    }
-
-    if (!modelCosts) {
-      console.warn(`Model ${modelName} not found in LiteLLM model info`)
-      return null
-    }
-
-    return {
-      input_cost_per_token: modelCosts.input_cost_per_token ?? 0,
-      output_cost_per_token: modelCosts.output_cost_per_token ?? 0,
-      cache_read_input_token_cost: modelCosts.cache_read_input_token_cost,
-      cache_creation_input_token_cost: modelCosts.cache_creation_input_token_cost,
-    }
-  } catch (error) {
-    console.warn("Error fetching LiteLLM model cost:", error)
+  if (!modelCosts) {
+    console.warn(`Model ${modelName} not found in LiteLLM model info`)
     return null
+  }
+
+  return {
+    input_cost_per_token: modelCosts.input_cost_per_token || 0,
+    output_cost_per_token: modelCosts.output_cost_per_token || 0,
+    cache_read_input_token_cost: modelCosts.cache_read_input_token_cost || undefined,
+    cache_creation_input_token_cost: modelCosts.cache_creation_input_token_cost || undefined,
   }
 }
