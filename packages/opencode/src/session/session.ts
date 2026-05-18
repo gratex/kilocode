@@ -32,6 +32,7 @@ import { Global } from "@opencode-ai/core/global"
 // kilocode_change start - legacy promise helpers + kilocode extensions
 import { makeRuntime } from "@/effect/run-service"
 import { KiloSession, kiloSessionFork } from "@/kilocode/session"
+import * as LitellmCosts from "@/kilocode/session/litellm-costs"
 import { fn } from "@/util/fn"
 // kilocode_change end
 import { Effect, Layer, Option, Context, Schema, Types } from "effect"
@@ -352,6 +353,8 @@ export const getUsage = (input: {
       input.usage.cachedInputTokens ??
       // @ts-expect-error — LiteLLM stores cached tokens in metadata
       input.metadata?.["litellm"]?.["usage"]?.["prompt_tokens_details"]?.["cached_tokens"] ??
+      // @ts-expect-error — LiteLLM top-level cache read field
+      input.metadata?.["litellm"]?.["usage"]?.["cache_read_input_tokens"] ??
       // kilocode_change end
       0,
   )
@@ -366,6 +369,8 @@ export const getUsage = (input: {
         input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
         // @ts-expect-error
         input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+        // @ts-expect-error — LiteLLM stores cache creation tokens in metadata
+        input.metadata?.["litellm"]?.["usage"]?.["cache_creation_input_tokens"] ??
         0,
     ),
   )
@@ -402,16 +407,31 @@ export const getUsage = (input: {
     input.model.cost?.experimentalOver200K && tokens.input + tokens.cache.read > 200_000
       ? input.model.cost.experimentalOver200K
       : input.model.cost
+  // kilocode_change start - Hardcoded cost fallback for LiteLLM
+  let effectiveCost = costInfo
+  if (
+    input.model.providerID === "litellm" &&
+    (effectiveCost?.input ?? 0) === 0 &&
+    (effectiveCost?.output ?? 0) === 0
+  ) {
+    const defaultCost = LitellmCosts.findDefaultCost(input.model.id)
+    if (defaultCost) {
+      const over200k =
+        defaultCost.experimentalOver200K && tokens.input + tokens.cache.read > 200_000
+      effectiveCost = over200k ? defaultCost.experimentalOver200K! : defaultCost
+    }
+  }
+  // kilocode_change end
   return {
     cost: safe(
       new Decimal(0)
-        .add(new Decimal(tokens.input).mul(costInfo?.input ?? 0).div(1_000_000))
-        .add(new Decimal(tokens.output).mul(costInfo?.output ?? 0).div(1_000_000))
-        .add(new Decimal(tokens.cache.read).mul(costInfo?.cache?.read ?? 0).div(1_000_000))
-        .add(new Decimal(tokens.cache.write).mul(costInfo?.cache?.write ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.input).mul(effectiveCost?.input ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.output).mul(effectiveCost?.output ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.cache.read).mul(effectiveCost?.cache?.read ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.cache.write).mul(effectiveCost?.cache?.write ?? 0).div(1_000_000))
         // TODO: update models.dev to have better pricing model, for now:
         // charge reasoning tokens at the same rate as output tokens
-        .add(new Decimal(tokens.reasoning).mul(costInfo?.output ?? 0).div(1_000_000))
+        .add(new Decimal(tokens.reasoning).mul(effectiveCost?.output ?? 0).div(1_000_000))
         .toNumber(),
     ),
     tokens,

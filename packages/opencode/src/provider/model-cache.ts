@@ -330,6 +330,16 @@ export namespace ModelCache {
         },
       }
 
+      const over200k = (mi.input_cost_per_token_above_200k_tokens ?? mi.output_cost_per_token_above_200k_tokens) ? {
+        input: mi.input_cost_per_token_above_200k_tokens ?? costs.input,
+        output: mi.output_cost_per_token_above_200k_tokens ?? costs.output,
+        cache: {
+          // Note: LiteLLM has a typo — singular "token" not "tokens" for cache_read
+          read: mi.cache_read_input_token_cost_above_200k_token ?? costs.cache.read,
+          write: mi.cache_creation_input_token_cost_above_200k_tokens ?? costs.cache.write,
+        },
+      } : undefined
+
       models[model.id] = {
         id: model.id,
         name: model.id,
@@ -339,7 +349,7 @@ export namespace ModelCache {
         reasoning: mi.supports_reasoning ?? false,
         temperature: true,
         tool_call: true,
-        cost: costs,
+        cost: { ...costs, experimentalOver200K: over200k },
         limit: {
           context: mi.max_input_tokens ?? mi.max_tokens ?? 128000,
           output: mi.max_output_tokens ?? 4096,

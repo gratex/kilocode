@@ -1,5 +1,6 @@
 import { createContext, createSignal, useContext, onMount, onCleanup, type Accessor } from "solid-js"
 import type { LiteLLMSpendMessage } from "../types/messages"
+import { useVSCode } from "./vscode"
 
 export interface LiteLLMSpendData {
   spent: number
@@ -20,10 +21,11 @@ const LiteLLMSpendContext = createContext<LiteLLMSpendContextValue>()
 export function LiteLLMSpendProvider(props: { children: any }) {
   const [spend, setSpend] = createSignal<LiteLLMSpendData | null>(null)
   const [isLoading, setIsLoading] = createSignal(false)
+  const vscode = useVSCode()
 
   const requestSpend = () => {
     setIsLoading(true)
-    window.postMessage({ type: "requestLiteLLMSpend" }, "*")
+    vscode.postMessage({ type: "requestLiteLLMSpend" })
   }
 
   const handleMessage = (event: MessageEvent) => {

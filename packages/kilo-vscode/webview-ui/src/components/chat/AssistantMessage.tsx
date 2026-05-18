@@ -19,6 +19,7 @@ import type {
 } from "@kilocode/sdk/v2"
 import { useData } from "@kilocode/kilo-ui/context/data"
 import { useSession } from "../../context/session"
+import { useProvider } from "../../context/provider"
 import { useDisplay } from "../../context/display"
 import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
@@ -121,6 +122,60 @@ type ToolStateProps = {
   status?: string
 }
 
+/** Cost display with optional token-type breakdown */
+function MessageCostDisplay(props: { message: SDKAssistantMessage }) {
+  const session = useSession()
+  const provider = useProvider()
+
+  const fmtCost = (cost: number | undefined): string | undefined => {
+    if (cost === undefined || cost === 0) return undefined
+    return `$${cost.toFixed(4)}`
+  }
+
+  const messageCost = createMemo(() => fmtCost(props.message.cost))
+
+  const messageCostBreakdown = createMemo(() => {
+    const msg = props.message
+    if (!msg.tokens || !msg.cost) return undefined
+    const sel = session.selected()
+    const costInfo = sel ? provider.findModel(sel)?.cost : undefined
+    if (!costInfo) return undefined
+    const tk = msg.tokens
+    const cr = tk.cache?.read ?? 0
+    const cw = tk.cache?.write ?? 0
+    const input = ((tk.input - cr - cw) * (costInfo.input ?? 0)) / 1_000_000
+    const output = (tk.output * (costInfo.output ?? 0)) / 1_000_000
+    const cacheRead = (cr * (costInfo.cache?.read ?? 0)) / 1_000_000
+    const cacheWrite = (cw * (costInfo.cache?.write ?? 0)) / 1_000_000
+    if (!(input > 0 || output > 0 || cacheRead > 0 || cacheWrite > 0)) return undefined
+    const fmt = (v: number) => `$${v.toFixed(4)}`
+    return { input: fmt(input), output: fmt(output), cacheRead: fmt(cacheRead), cacheWrite: fmt(cacheWrite) }
+  })
+
+  return (
+    <Show when={messageCost()}>
+      <div
+        style={{
+          "font-size": "12px",
+          color: "var(--vscode-descriptionForeground)",
+          "margin-top": "8px",
+          "text-align": "right",
+        }}
+      >
+        <span>{messageCost()}</span>
+        <Show when={messageCostBreakdown()}>
+          {(bd) => {
+            const parts = [`in:${bd().input}`, `out:${bd().output}`]
+            if (Number(bd().cacheRead.replace(/[^0-9.]/g, "")) > 0) parts.push(`cache_r:${bd().cacheRead}`)
+            if (Number(bd().cacheWrite.replace(/[^0-9.]/g, "")) > 0) parts.push(`cache_w:${bd().cacheWrite}`)
+            return <span style={{ "margin-left": "4px", opacity: 0.7, "font-size": "11px" }}>({parts.join(" ")})</span>
+          }}
+        </Show>
+      </div>
+    </Show>
+  )
+}
+
 function TodoToolCard(props: { part: ToolPart }) {
   const render = ToolRegistry.render(props.part.tool)
   const state = () => props.part.state as ToolStateProps
@@ -181,14 +236,6 @@ export const AssistantMessage: Component<AssistantMessageProps> = (props) => {
     if (!stored) return []
     return (stored as SDKPart[]).filter((part) => isRenderable(part))
   })
-
-  // Per-message cost display
-  const fmtCost = (cost: number | undefined): string | undefined => {
-    if (cost === undefined || cost === 0) return undefined
-    return `$${cost.toFixed(4)}`
-  }
-
-  const messageCost = createMemo(() => fmtCost(props.message.cost))
 
   return (
     <>
@@ -283,18 +330,7 @@ export const AssistantMessage: Component<AssistantMessageProps> = (props) => {
           )
         }}
       </For>
-      <Show when={messageCost()}>
-        <div
-          style={{
-            "font-size": "12px",
-            color: "var(--vscode-descriptionForeground)",
-            "margin-top": "8px",
-            "text-align": "right",
-          }}
-        >
-          {messageCost()}
-        </div>
-      </Show>
+      <MessageCostDisplay message={props.message} />
     </>
   )
 }

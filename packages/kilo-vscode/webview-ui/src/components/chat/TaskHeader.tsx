@@ -14,6 +14,7 @@ import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { Checkbox } from "@kilocode/kilo-ui/checkbox"
 import { useSession } from "../../context/session"
+import { useProvider } from "../../context/provider"
 import { collapseCostBreakdown } from "../../context/session-utils"
 import { useLanguage } from "../../context/language"
 import { useLiteLLMSpend } from "../../context/litellm-spend"
@@ -29,6 +30,7 @@ interface TaskHeaderProps {
 
 export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const session = useSession()
+  const provider = useProvider()
   const language = useLanguage()
 
   const title = createMemo(() => session.currentSession()?.title ?? language.t("command.session.new"))
@@ -62,9 +64,13 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
   const context = createMemo(() => {
     const usage = session.contextUsage()
     if (!usage) return undefined
-    const tokens = usage.tokens.toLocaleString(language.locale())
+    const sel = session.selected()
+    const model = sel ? provider.findModel(sel) : undefined
+    const limit = model?.limit?.context ?? model?.contextLength ?? 0
+    const tokens = usage.tokens
     const pct = usage.percentage !== null ? `${usage.percentage}%` : undefined
-    return { tokens, pct }
+    const hasLimit = limit > 0
+    return { tokens, pct, limit, hasLimit }
   })
 
   // Token breakdown from the last assistant message — only return if at least one value is > 0
@@ -190,10 +196,10 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
           <Show when={context()}>
             {(ctx) => (
               <Tooltip
-                value={ctx().pct ? `${ctx().tokens} tokens (${ctx().pct} of context)` : `${ctx().tokens} tokens`}
+                value={ctx().hasLimit ? `${fmtNum(ctx().tokens)}/${fmtNum(ctx().limit!)} tokens (${ctx().pct ?? "?"} of context)` : ctx().pct ? `${ctx().tokens} tokens (${ctx().pct} of context)` : `${ctx().tokens} tokens`}
                 placement="bottom"
               >
-                <span>{ctx().pct ?? ctx().tokens}</span>
+                <span>{ctx().hasLimit ? `${fmtNum(ctx().tokens)}/${fmtNum(ctx().limit!)}` : (ctx().pct ?? fmtNum(ctx().tokens))}</span>
               </Tooltip>
             )}
           </Show>
