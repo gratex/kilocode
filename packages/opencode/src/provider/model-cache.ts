@@ -345,11 +345,16 @@ export namespace ModelCache {
       // LiteLLM returns 0 for unknown cost/limit fields (not null/undefined).
       // Use || (not ??) so that 0 from the API is treated as "not set" and
       // falls through to the next source or the hardcoded default.
+      //
+      // LiteLLM costs are per-token (e.g. $4e-8). Downstream getUsage()
+      // assumes per-1M-tokens and divides by 1M, so we multiply by 1M here
+      // to normalize to the same unit as models.dev.
+      const PER_M = 1_000_000
       const apiCost = {
-        input: mi.input_cost_per_token || undefined,
-        output: mi.output_cost_per_token || undefined,
-        cache_read: mi.cache_read_input_token_cost || mi.prompt_cache_cost_per_token || undefined,
-        cache_write: mi.cache_creation_input_token_cost || mi.prompt_cache_write_cost_per_token || undefined,
+        input: (mi.input_cost_per_token || undefined) ? (mi.input_cost_per_token * PER_M) : undefined,
+        output: (mi.output_cost_per_token || undefined) ? (mi.output_cost_per_token * PER_M) : undefined,
+        cache_read: (mi.cache_read_input_token_cost || mi.prompt_cache_cost_per_token || undefined) ? ((mi.cache_read_input_token_cost || mi.prompt_cache_cost_per_token) * PER_M) : undefined,
+        cache_write: (mi.cache_creation_input_token_cost || mi.prompt_cache_write_cost_per_token || undefined) ? ((mi.cache_creation_input_token_cost || mi.prompt_cache_write_cost_per_token) * PER_M) : undefined,
       }
 
       // Fallback to hardcoded known costs when the API returns 0 for everything.
@@ -366,10 +371,10 @@ export namespace ModelCache {
       const over200kApi = (mi.input_cost_per_token_above_200k_tokens || undefined) ?? (mi.output_cost_per_token_above_200k_tokens || undefined)
       const defaultOver200k = defaultCost?.experimentalOver200K
       const over200k = (over200kApi || defaultOver200k) ? {
-        input: (mi.input_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.input ?? cost.input,
-        output: (mi.output_cost_per_token_above_200k_tokens || undefined) ?? defaultOver200k?.output ?? cost.output,
-        cache_read: (mi.cache_read_input_token_cost_above_200k_token || undefined) ?? defaultOver200k?.cache?.read ?? cost.cache_read,
-        cache_write: (mi.cache_creation_input_token_cost_above_200k_tokens || undefined) ?? defaultOver200k?.cache?.write ?? cost.cache_write,
+        input: (mi.input_cost_per_token_above_200k_tokens || undefined) ? (mi.input_cost_per_token_above_200k_tokens * PER_M) : (defaultOver200k?.input ?? cost.input),
+        output: (mi.output_cost_per_token_above_200k_tokens || undefined) ? (mi.output_cost_per_token_above_200k_tokens * PER_M) : (defaultOver200k?.output ?? cost.output),
+        cache_read: (mi.cache_read_input_token_cost_above_200k_token || undefined) ? (mi.cache_read_input_token_cost_above_200k_token * PER_M) : (defaultOver200k?.cache?.read ?? cost.cache_read),
+        cache_write: (mi.cache_creation_input_token_cost_above_200k_tokens || undefined) ? (mi.cache_creation_input_token_cost_above_200k_tokens * PER_M) : (defaultOver200k?.cache?.write ?? cost.cache_write),
       } : undefined
 
       // Same || pattern for limits: LiteLLM returns 0 when unknown, but 0 is
