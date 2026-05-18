@@ -71,6 +71,16 @@ export class ServerManager {
       )
     }
 
+    // kilocode_change - VSIX packaging strips execute permissions on macOS/Linux.
+    // Restore them at runtime so the CLI binary can be spawned.
+    if (process.platform !== "win32") {
+      try {
+        fs.chmodSync(cliPath, 0o755)
+      } catch {
+        // chmodSync may fail on readonly filesystems; ignore
+      }
+    }
+
     const stat = fs.statSync(cliPath)
     console.log("[Kilo New] ServerManager: 📄 CLI isFile:", stat.isFile())
     console.log("[Kilo New] ServerManager: 📄 CLI mode (octal):", (stat.mode & 0o777).toString(8))

@@ -168,14 +168,25 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
 
       const baseURL = providerConfig?.options?.baseURL ?? env.LITELLM_BASE_URL ?? env.LITELLM_API_BASE
 
+      // The @ai-sdk/openai-compatible SDK appends /chat/completions to baseURL.
+      // LiteLLM's OpenAI-compatible endpoints live under /v1, so we must append
+      // /v1 to the user-provided base URL (e.g. https://litellm.gratex.ai →
+      // https://litellm.gratex.ai/v1) for the SDK to hit /v1/chat/completions.
+      // The raw baseURL is still used for model listing (/models) and key info
+      // (/key/info) which are at the root level.
+      const sdkBaseURL = baseURL && !baseURL.endsWith("/v1") ? `${baseURL.replace(/\/+$/, "")}/v1` : baseURL
+
       return {
         autoload: hasKey && !!baseURL,
         options: {
-          ...(baseURL ? { baseURL } : {}),
+          ...(sdkBaseURL ? { baseURL: sdkBaseURL } : {}),
           ...(hasKey ? {} : { apiKey: "anonymous" }),
         },
         async getModel(sdk: any, modelID: string) {
-          return sdk.chat(modelID)
+          // @ai-sdk/openai-compatible has languageModel(), not chat()
+          if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
+          if (sdk.chat) return sdk.chat(modelID)
+          return sdk.languageModel(modelID)
         },
       }
     }),
