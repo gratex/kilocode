@@ -139,6 +139,27 @@ describe("calcContextUsage", () => {
     expect(result.tokens).toBe(100)
     expect(result.percentage).toBe(10)
   })
+
+  it("includes cache tokens in total (input is non-cached portion only)", () => {
+    // After LiteLLM cost fix: input = non-cached tokens, cache.read = cached tokens
+    // Total context = input + output + cache.read + cache.write
+    const result = calcContextUsage({ input: 50, output: 100, cache: { read: 200, write: 30 } }, 1000)
+    expect(result.tokens).toBe(380) // 50 + 100 + 200 + 30
+    expect(result.percentage).toBe(38)
+  })
+
+  it("accepts providerID parameter without affecting calculation", () => {
+    // providerID is accepted but not currently used in the calculation
+    const result = calcContextUsage({ input: 100, output: 50 }, 1000, "litellm")
+    expect(result.tokens).toBe(150)
+    expect(result.percentage).toBe(15)
+  })
+
+  it("calculates percentage with cache tokens against context limit", () => {
+    const result = calcContextUsage({ input: 500, output: 500, cache: { read: 1000, write: 0 } }, 10000)
+    expect(result.tokens).toBe(2000)
+    expect(result.percentage).toBe(20)
+  })
 })
 
 // ── Cost breakdown helpers ──────────────────────────────────────────────
