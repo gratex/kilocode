@@ -91,7 +91,6 @@ export function calcContextUsage(
     cache?: { read: number; write: number }
   },
   contextLimit: number | undefined,
-  providerID?: string,
 ): { tokens: number; percentage: number | null } {
   // tokens.input is always the non-cached portion (cache tokens subtracted by getUsage).
   // Cache tokens are stored separately in tokens.cache.read and tokens.cache.write.

@@ -5,30 +5,8 @@
 if (process.platform === "win32" && !("type" in process)) {
   Object.defineProperty(process, "type", { value: "kilo-bun", configurable: true })
 }
-
-// Defense-in-depth: MCP SDK uses its own HTTP client internally (not globalThis.fetch).
-// This patch ensures MCP's fetch calls also get CA cert + rejectUnauthorized:false.
-// Note: index.ts already patches globalThis.fetch for all calls — this is an additional
-// safeguard for MCP-specific transports that may bypass the global patch.
-// KILO_TLS_CA_BUNDLE_PATH takes priority (file path — avoids E2BIG on Linux spawn)
-// Fallback: KILO_TLS_CA_BUNDLE (PEM content string, backward compat)
-// Fallback: SSL_CERT_FILE / NODE_EXTRA_CA_CERTS (file path)
-const caBundlePath = process.env.KILO_TLS_CA_BUNDLE_PATH
-const caBundle = process.env.KILO_TLS_CA_BUNDLE
-const certPath = caBundlePath ?? process.env.SSL_CERT_FILE ?? process.env.NODE_EXTRA_CA_CERTS
-const ca = caBundlePath
-  ? Bun.file(caBundlePath)
-  : caBundle
-    ? caBundle
-    : certPath
-      ? Bun.file(certPath)
-      : undefined
-if (ca) {
-  const origFetch = globalThis.fetch
-  const patchedFetch = (input: RequestInfo | URL, init?: RequestInit) =>
-    origFetch(input, { ...init, tls: { ca, rejectUnauthorized: false, ...(init as any)?.tls } } as any)
-  globalThis.fetch = Object.assign(patchedFetch, { preconnect: origFetch.preconnect })
-}
+// TLS/CA cert patch is handled by kilocode/util/tls-patch (imported in index.ts before
+// any other module). The global fetch patch covers MCP's HTTP transports as well.
 // kilocode_change end
 
 import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"

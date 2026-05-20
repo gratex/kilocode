@@ -14,224 +14,223 @@ import { Effect } from "effect"
 import { jsonRequest } from "./trace"
 import { fetchLiteLLMKeyInfo, calculateLiteLLMBudgetStatus, fetchLiteLLMModelCost } from "@kilocode/kilo-gateway" // kilocode_change
 
-export const ProviderRoutes = lazy(
-  () =>
-    new Hono()
-      .get(
-        "/",
-        describeRoute({
-          summary: "List providers",
-          description: "Get a list of all available AI providers, including both available and connected ones.",
-          operationId: "provider.list",
-          responses: {
-            200: {
-              description: "List of providers",
-              content: {
-                "application/json": {
-                  schema: resolver(Provider.ListResult.zod),
-                },
+export const ProviderRoutes = lazy(() =>
+  new Hono()
+    .get(
+      "/",
+      describeRoute({
+        summary: "List providers",
+        description: "Get a list of all available AI providers, including both available and connected ones.",
+        operationId: "provider.list",
+        responses: {
+          200: {
+            description: "List of providers",
+            content: {
+              "application/json": {
+                schema: resolver(Provider.ListResult.zod),
               },
             },
           },
-        }),
-        async (c) =>
-          jsonRequest("ProviderRoutes.list", c, function* () {
-            const svc = yield* Provider.Service
-            const cfg = yield* Config.Service
-            const config = yield* cfg.get()
-            const all = yield* ModelsDev.Service.use((s) => s.get())
-            const disabled = new Set(config.disabled_providers ?? [])
-            const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-            const filtered: Record<string, (typeof all)[string]> = {}
-            for (const [key, value] of Object.entries(all)) {
-              if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) {
-                filtered[key] = value
-              }
+        },
+      }),
+      async (c) =>
+        jsonRequest("ProviderRoutes.list", c, function* () {
+          const svc = yield* Provider.Service
+          const cfg = yield* Config.Service
+          const config = yield* cfg.get()
+          const all = yield* ModelsDev.Service.use((s) => s.get())
+          const disabled = new Set(config.disabled_providers ?? [])
+          const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
+          const filtered: Record<string, (typeof all)[string]> = {}
+          for (const [key, value] of Object.entries(all)) {
+            if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) {
+              filtered[key] = value
             }
-            const connected = yield* svc.list()
-            const providers = Object.assign(
-              mapValues(filtered, (x) => Provider.fromModelsDevProvider(x)),
-              connected,
-            )
-            // kilocode_change start
-            const failed = ModelCache.failedProviders()
-            // Keep connected or failed providers even when they have 0 models so /connect can re-auth them.
-            // Note: connected only contains providers whose model list is non-empty after Provider.Service.list(),
-            // so failed must be checked explicitly for providers whose fetch returned an error.
-            const failedSet = new Set(failed)
-            const validProviders = pickBy(
-              providers,
-              (item, id) => Object.keys(item.models).length > 0 || id in connected || failedSet.has(id),
-            )
-            return {
-              all: Object.values(validProviders),
-              default: Provider.defaultModelIDs(pickBy(validProviders, (item) => Object.keys(item.models).length > 0)),
-              connected: Object.keys(connected),
-              failed,
-            }
-            // kilocode_change end
-          }),
-      )
-      .get(
-        "/auth",
-        describeRoute({
-          summary: "Get provider auth methods",
-          description: "Retrieve available authentication methods for all AI providers.",
-          operationId: "provider.auth",
-          responses: {
-            200: {
-              description: "Provider auth methods",
-              content: {
-                "application/json": {
-                  schema: resolver(ProviderAuth.Methods.zod),
-                },
+          }
+          const connected = yield* svc.list()
+          const providers = Object.assign(
+            mapValues(filtered, (x) => Provider.fromModelsDevProvider(x)),
+            connected,
+          )
+          // kilocode_change start
+          const failed = ModelCache.failedProviders()
+          // Keep connected or failed providers even when they have 0 models so /connect can re-auth them.
+          // Note: connected only contains providers whose model list is non-empty after Provider.Service.list(),
+          // so failed must be checked explicitly for providers whose fetch returned an error.
+          const failedSet = new Set(failed)
+          const validProviders = pickBy(
+            providers,
+            (item, id) => Object.keys(item.models).length > 0 || id in connected || failedSet.has(id),
+          )
+          return {
+            all: Object.values(validProviders),
+            default: Provider.defaultModelIDs(pickBy(validProviders, (item) => Object.keys(item.models).length > 0)),
+            connected: Object.keys(connected),
+            failed,
+          }
+          // kilocode_change end
+        }),
+    )
+    .get(
+      "/auth",
+      describeRoute({
+        summary: "Get provider auth methods",
+        description: "Retrieve available authentication methods for all AI providers.",
+        operationId: "provider.auth",
+        responses: {
+          200: {
+            description: "Provider auth methods",
+            content: {
+              "application/json": {
+                schema: resolver(ProviderAuth.Methods.zod),
               },
             },
           },
+        },
+      }),
+      async (c) =>
+        jsonRequest("ProviderRoutes.auth", c, function* () {
+          const svc = yield* ProviderAuth.Service
+          return yield* svc.methods()
         }),
-        async (c) =>
-          jsonRequest("ProviderRoutes.auth", c, function* () {
-            const svc = yield* ProviderAuth.Service
-            return yield* svc.methods()
-          }),
-      )
-      .post(
-        "/:providerID/oauth/authorize",
-        describeRoute({
-          summary: "OAuth authorize",
-          description: "Initiate OAuth authorization for a specific AI provider to get an authorization URL.",
-          operationId: "provider.oauth.authorize",
-          responses: {
-            200: {
-              description: "Authorization URL and method",
-              content: {
-                "application/json": {
-                  schema: resolver(ProviderAuth.Authorization.zod.optional()),
-                },
+    )
+    .post(
+      "/:providerID/oauth/authorize",
+      describeRoute({
+        summary: "OAuth authorize",
+        description: "Initiate OAuth authorization for a specific AI provider to get an authorization URL.",
+        operationId: "provider.oauth.authorize",
+        responses: {
+          200: {
+            description: "Authorization URL and method",
+            content: {
+              "application/json": {
+                schema: resolver(ProviderAuth.Authorization.zod.optional()),
               },
             },
-            ...errors(400),
           },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          providerID: ProviderID.zod.meta({ description: "Provider ID" }),
         }),
-        validator(
-          "param",
-          z.object({
-            providerID: ProviderID.zod.meta({ description: "Provider ID" }),
-          }),
-        ),
-        validator("json", ProviderAuth.AuthorizeInput.zod),
-        async (c) =>
-          jsonRequest("ProviderRoutes.oauth.authorize", c, function* () {
-            const providerID = c.req.valid("param").providerID
-            const { method, inputs } = c.req.valid("json")
-            const svc = yield* ProviderAuth.Service
-            return yield* svc.authorize({
-              providerID,
-              method,
-              inputs,
-            })
-          }),
-      )
-      .post(
-        "/:providerID/oauth/callback",
-        describeRoute({
-          summary: "OAuth callback",
-          description: "Handle the OAuth callback from a provider after user authorization.",
-          operationId: "provider.oauth.callback",
-          responses: {
-            200: {
-              description: "OAuth callback processed successfully",
-              content: {
-                "application/json": {
-                  schema: resolver(z.boolean()),
-                },
-              },
-            },
-            ...errors(400),
-          },
-        }),
-        validator(
-          "param",
-          z.object({
-            providerID: ProviderID.zod.meta({ description: "Provider ID" }),
-          }),
-        ),
-        validator("json", ProviderAuth.CallbackInput.zod),
-        async (c) =>
-          jsonRequest("ProviderRoutes.oauth.callback", c, function* () {
-            const providerID = c.req.valid("param").providerID
-            const { method, code } = c.req.valid("json")
-            const svc = yield* ProviderAuth.Service
-            yield* svc.callback({
-              providerID,
-              method,
-              code,
-            })
-            return true
-          }),
-      )
-      // kilocode_change start
-      .get(
-        "/litellm/spend",
-        describeRoute({
-          summary: "Get LiteLLM spend info",
-          description: "Get current spend, budget, and remaining credit for the LiteLLM API key.",
-          operationId: "provider.litellm.spend",
-          responses: {
-            200: { description: "LiteLLM spend info" },
-            401: { description: "LiteLLM not configured" },
-            500: { description: "Failed to fetch key info" },
-          },
-        }),
-        async (c) =>
-          jsonRequest("ProviderRoutes.litellm.spend", c, function* () {
-            const cfg = yield* Config.Service
-            const config = yield* cfg.get()
-            const litellmConfig = config.provider?.["litellm"]
-            const env = process.env
-            const baseURL = litellmConfig?.options?.baseURL || env.LITELLM_BASE_URL || env.LITELLM_API_BASE
-            const apiKey = litellmConfig?.options?.apiKey || env.LITELLM_API_KEY || env.LITELLM_API_KLUC
-            if (!baseURL || !apiKey) return c.json({ error: "LiteLLM not configured" }, 401)
-            const keyInfo = yield* Effect.promise(() => fetchLiteLLMKeyInfo(baseURL, apiKey))
-            if (!keyInfo) return c.json({ error: "Failed to fetch LiteLLM key info" }, 500)
-            const status = calculateLiteLLMBudgetStatus(keyInfo)
-            return { ...status, raw: keyInfo }
-          }),
-      )
-      .get(
-        "/litellm/model-cost",
-        describeRoute({
-          summary: "Get LiteLLM model cost",
-          description: "Get per-token cost for a specific LiteLLM model.",
-          operationId: "provider.litellm.modelCost",
-          responses: {
-            200: { description: "Model cost info" },
-            400: { description: "Model name required" },
-            401: { description: "LiteLLM not configured" },
-            500: { description: "Failed to fetch model cost" },
-          },
-        }),
-        validator("query", z.object({ model: z.string().optional() })),
-        async (c) =>
-          jsonRequest("ProviderRoutes.litellm.modelCost", c, function* () {
-            const modelName = c.req.valid("query").model
-            if (!modelName) return c.json({ error: "Model name required" }, 400)
-            const cfg = yield* Config.Service
-            const config = yield* cfg.get()
-            const litellmConfig = config.provider?.["litellm"]
-            const env = process.env
-            const baseURL = litellmConfig?.options?.baseURL || env.LITELLM_BASE_URL || env.LITELLM_API_BASE
-            const apiKey = litellmConfig?.options?.apiKey || env.LITELLM_API_KEY || env.LITELLM_API_KLUC
-            if (!baseURL || !apiKey) return c.json({ error: "LiteLLM not configured" }, 401)
-            const modelCost = yield* Effect.promise(() => fetchLiteLLMModelCost(baseURL, apiKey, modelName))
-            if (!modelCost) return c.json({ error: "Failed to fetch model cost" }, 500)
-            return {
-              input: modelCost.input_cost_per_token,
-              output: modelCost.output_cost_per_token,
-              cache_read: modelCost.cache_read_input_token_cost ?? null,
-              cache_write: modelCost.cache_creation_input_token_cost ?? null,
-            }
-          }),
       ),
+      validator("json", ProviderAuth.AuthorizeInput.zod),
+      async (c) =>
+        jsonRequest("ProviderRoutes.oauth.authorize", c, function* () {
+          const providerID = c.req.valid("param").providerID
+          const { method, inputs } = c.req.valid("json")
+          const svc = yield* ProviderAuth.Service
+          return yield* svc.authorize({
+            providerID,
+            method,
+            inputs,
+          })
+        }),
+    )
+    .post(
+      "/:providerID/oauth/callback",
+      describeRoute({
+        summary: "OAuth callback",
+        description: "Handle the OAuth callback from a provider after user authorization.",
+        operationId: "provider.oauth.callback",
+        responses: {
+          200: {
+            description: "OAuth callback processed successfully",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          providerID: ProviderID.zod.meta({ description: "Provider ID" }),
+        }),
+      ),
+      validator("json", ProviderAuth.CallbackInput.zod),
+      async (c) =>
+        jsonRequest("ProviderRoutes.oauth.callback", c, function* () {
+          const providerID = c.req.valid("param").providerID
+          const { method, code } = c.req.valid("json")
+          const svc = yield* ProviderAuth.Service
+          yield* svc.callback({
+            providerID,
+            method,
+            code,
+          })
+          return true
+        }),
+    )
+    // kilocode_change start - LiteLLM spend and model-cost endpoints
+    .get(
+      "/litellm/spend",
+      describeRoute({
+        summary: "Get LiteLLM spend info",
+        description: "Get current spend, budget, and remaining credit for the LiteLLM API key.",
+        operationId: "provider.litellm.spend",
+        responses: {
+          200: { description: "LiteLLM spend info" },
+          401: { description: "LiteLLM not configured" },
+          500: { description: "Failed to fetch key info" },
+        },
+      }),
+      async (c) =>
+        jsonRequest("ProviderRoutes.litellm.spend", c, function* () {
+          const cfg = yield* Config.Service
+          const config = yield* cfg.get()
+          const litellmConfig = config.provider?.["litellm"]
+          const env = process.env
+          const baseURL = litellmConfig?.options?.baseURL || env.LITELLM_BASE_URL || env.LITELLM_API_BASE
+          const apiKey = litellmConfig?.options?.apiKey || env.LITELLM_API_KEY || env.LITELLM_API_KLUC
+          if (!baseURL || !apiKey) return c.json({ error: "LiteLLM not configured" }, 401)
+          const keyInfo = yield* Effect.promise(() => fetchLiteLLMKeyInfo(baseURL, apiKey))
+          if (!keyInfo) return c.json({ error: "Failed to fetch LiteLLM key info" }, 500)
+          const status = calculateLiteLLMBudgetStatus(keyInfo)
+          return { ...status, raw: keyInfo }
+        }),
+    )
+    .get(
+      "/litellm/model-cost",
+      describeRoute({
+        summary: "Get LiteLLM model cost",
+        description: "Get per-token cost for a specific LiteLLM model.",
+        operationId: "provider.litellm.modelCost",
+        responses: {
+          200: { description: "Model cost info" },
+          400: { description: "Model name required" },
+          401: { description: "LiteLLM not configured" },
+          500: { description: "Failed to fetch model cost" },
+        },
+      }),
+      validator("query", z.object({ model: z.string().optional() })),
+      async (c) =>
+        jsonRequest("ProviderRoutes.litellm.modelCost", c, function* () {
+          const modelName = c.req.valid("query").model
+          if (!modelName) return c.json({ error: "Model name required" }, 400)
+          const cfg = yield* Config.Service
+          const config = yield* cfg.get()
+          const litellmConfig = config.provider?.["litellm"]
+          const env = process.env
+          const baseURL = litellmConfig?.options?.baseURL || env.LITELLM_BASE_URL || env.LITELLM_API_BASE
+          const apiKey = litellmConfig?.options?.apiKey || env.LITELLM_API_KEY || env.LITELLM_API_KLUC
+          if (!baseURL || !apiKey) return c.json({ error: "LiteLLM not configured" }, 401)
+          const modelCost = yield* Effect.promise(() => fetchLiteLLMModelCost(baseURL, apiKey, modelName))
+          if (!modelCost) return c.json({ error: "Failed to fetch model cost" }, 500)
+          return {
+            input: modelCost.input_cost_per_token,
+            output: modelCost.output_cost_per_token,
+            cache_read: modelCost.cache_read_input_token_cost ?? null,
+            cache_write: modelCost.cache_creation_input_token_cost ?? null,
+          }
+        }),
+    ),
   // kilocode_change end
 )

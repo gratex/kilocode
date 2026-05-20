@@ -400,18 +400,6 @@ export const getUsage = (input: {
     provider: input.provider,
     providerID: input.model.providerID,
   })
-  // Debug: log cost calculation for litellm
-  if (input.model.providerID === "litellm") {
-    log.info("litellm getUsage", {
-      modelId: input.model.id,
-      reported,
-      modelCost: input.model.cost,
-      modelLimit: input.model.limit,
-      metadataKeys: input.metadata ? Object.keys(input.metadata) : [],
-      litellmMeta: input.metadata?.["litellm"],
-      tokens: { input: tokens.input, output: tokens.output, cacheRead: tokens.cache.read, cacheWrite: tokens.cache.write },
-    })
-  }
   if (reported !== undefined) return { cost: safe(reported), tokens }
   // kilocode_change end
 
@@ -419,21 +407,13 @@ export const getUsage = (input: {
     input.model.cost?.experimentalOver200K && tokens.input + tokens.cache.read > 200_000
       ? input.model.cost.experimentalOver200K
       : input.model.cost
-  // kilocode_change start - Hardcoded cost fallback for LiteLLM
-  let effectiveCost = costInfo
-  if (
-    input.model.providerID === "litellm" &&
-    (effectiveCost?.input ?? 0) === 0 &&
-    (effectiveCost?.output ?? 0) === 0
-  ) {
-    const defaultCost = LitellmCosts.findDefaultCost(input.model.id)
-    if (defaultCost) {
-      const over200k =
-        defaultCost.experimentalOver200K && tokens.input + tokens.cache.read > 200_000
-      effectiveCost = over200k ? defaultCost.experimentalOver200K! : defaultCost
-    }
-  }
-  // kilocode_change end
+  // kilocode_change - LiteLLM cost fallback extracted to litellm-costs.ts
+  const effectiveCost = LitellmCosts.applyLitellmCostFallback(
+    costInfo,
+    input.model.id,
+    input.model.providerID,
+    tokens.input + tokens.cache.read,
+  )
   return {
     cost: safe(
       new Decimal(0)

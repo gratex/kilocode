@@ -222,6 +222,9 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
       }
       // kilocode_change end
 
+      // kilocode_change - stash pre-fetched litellm models for registration after if/else
+      let litellmPre: Record<string, any> | null = null
+
       if (kiloAllowed) {
         const opts = config.provider?.kilo?.options
         const auth = yield* Effect.promise(() => Auth.get("kilo"))
@@ -231,20 +234,21 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
           ...(base ? { baseURL: base } : {}),
           ...(org ? { kilocodeOrganizationId: org } : {}),
         }
-        const [kilo, apertis, litellm] = yield* Effect.all(
+        // kilocode_change - litellm fetched concurrently with kilo/apertis when kiloAllowed
+        const litellmPreFetch = providers["litellm"]
+          ? Effect.succeed(null)
+          : Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({})))
+        const [kilo, apertis, litellmData] = yield* Effect.all(
           [
             Effect.promise(() => ModelCache.fetch("kilo", fetch).catch(() => ({}))),
             providers["apertis"]
               ? Effect.succeed(null)
               : Effect.promise(() => ModelCache.fetch("apertis", aptFetch).catch(() => ({}))),
-            // kilocode_change start
-            providers["litellm"]
-              ? Effect.succeed(null)
-              : Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({}))),
-            // kilocode_change end
+            litellmPreFetch,
           ],
           { concurrency: 3 },
         )
+        litellmPre = litellmData
 
         providers["kilo"] = {
           id: "kilo",
@@ -270,41 +274,26 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
             yield* Effect.sync(() => void ModelCache.refresh("apertis", aptFetch).catch(() => {}))
           }
         }
-        // kilocode_change start
-        if (!providers["litellm"] && litellm !== null) {
-          providers["litellm"] = {
-            id: "litellm",
-            name: "LiteLLM Proxy",
-            env: ["LITELLM_API_KEY"],
-            api: litellmBase,
+      } else {
+        if (!providers["apertis"]) {
+          const apertis = yield* Effect.promise(() => ModelCache.fetch("apertis", aptFetch).catch(() => ({})))
+          providers["apertis"] = {
+            id: "apertis",
+            name: "Apertis",
+            env: ["APERTIS_API_KEY"],
+            api: aptBase,
             npm: "@ai-sdk/openai-compatible",
-            models: litellm,
+            models: apertis,
           }
-          if (Object.keys(litellm).length === 0) {
-            yield* Effect.sync(() => void ModelCache.refresh("litellm", litellmFetch).catch(() => {}))
+          if (Object.keys(apertis).length === 0) {
+            yield* Effect.sync(() => void ModelCache.refresh("apertis", aptFetch).catch(() => {}))
           }
         }
-        // kilocode_change end
-        return providers
       }
 
-      if (!providers["apertis"]) {
-        const apertis = yield* Effect.promise(() => ModelCache.fetch("apertis", aptFetch).catch(() => ({})))
-        providers["apertis"] = {
-          id: "apertis",
-          name: "Apertis",
-          env: ["APERTIS_API_KEY"],
-          api: aptBase,
-          npm: "@ai-sdk/openai-compatible",
-          models: apertis,
-        }
-        if (Object.keys(apertis).length === 0) {
-          yield* Effect.sync(() => void ModelCache.refresh("apertis", aptFetch).catch(() => {}))
-        }
-      }
-      // kilocode_change start
+      // kilocode_change - register litellm once, after the if/else block
       if (!providers["litellm"]) {
-        const litellm = yield* Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({})))
+        const litellm = litellmPre ?? (yield* Effect.promise(() => ModelCache.fetch("litellm", litellmFetch).catch(() => ({}))))
         providers["litellm"] = {
           id: "litellm",
           name: "LiteLLM Proxy",
@@ -317,7 +306,7 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
           yield* Effect.sync(() => void ModelCache.refresh("litellm", litellmFetch).catch(() => {}))
         }
       }
-      // kilocode_change end
+
       return providers
     })
     // kilocode_change end

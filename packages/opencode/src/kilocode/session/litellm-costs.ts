@@ -110,6 +110,28 @@ export function findDefaultCost(modelId: string): CostInfo | undefined {
   return undefined
 }
 
+/**
+ * Apply LiteLLM-specific cost fallback when model cost is zero/missing.
+ * If provider is litellm and costInfo has zero input+output, substitutes
+ * hardcoded default cost (with 200k variant if applicable).
+ * Returns the original costInfo unchanged for non-litellm or when cost exists.
+ */
+export function applyLitellmCostFallback(
+  costInfo: CostInfo | undefined,
+  modelId: string,
+  providerID: string | undefined,
+  totalInputTokens: number,
+): CostInfo | undefined {
+  if (providerID !== "litellm") return costInfo
+  if ((costInfo?.input ?? 0) !== 0 || (costInfo?.output ?? 0) !== 0) return costInfo
+
+  const defaultCost = findDefaultCost(modelId)
+  if (!defaultCost) return costInfo
+
+  const over200k = defaultCost.experimentalOver200K && totalInputTokens > 200_000
+  return over200k ? defaultCost.experimentalOver200K! : defaultCost
+}
+
 /** Cache entry for runtime-fetched model costs */
 interface CachedCost {
   cost: CostInfo

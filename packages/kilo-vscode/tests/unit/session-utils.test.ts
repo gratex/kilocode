@@ -148,13 +148,6 @@ describe("calcContextUsage", () => {
     expect(result.percentage).toBe(38)
   })
 
-  it("accepts providerID parameter without affecting calculation", () => {
-    // providerID is accepted but not currently used in the calculation
-    const result = calcContextUsage({ input: 100, output: 50 }, 1000, "litellm")
-    expect(result.tokens).toBe(150)
-    expect(result.percentage).toBe(15)
-  })
-
   it("calculates percentage with cache tokens against context limit", () => {
     const result = calcContextUsage({ input: 500, output: 500, cache: { read: 1000, write: 0 } }, 10000)
     expect(result.tokens).toBe(2000)
