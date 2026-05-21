@@ -112,6 +112,15 @@ export interface BrowserSettings {
 
 export type TerminalCommandDisplay = "expanded" | "collapsed"
 
+export interface ObservabilityConfig {
+  enabled?: boolean
+  lokiUrl?: string
+  tempoUrl?: string
+  includePayload?: boolean
+  caCertPath?: string
+  skipTlsVerify?: boolean
+}
+
 export interface Config {
   permission?: PermissionConfig
   model?: string | null
@@ -140,6 +149,7 @@ export interface Config {
   auto_collapse_reasoning?: boolean
   experimental?: ExperimentalConfig
   indexing?: IndexingConfig
+  observability?: ObservabilityConfig
 }
 
 export interface FeatureFlags {

@@ -1085,6 +1085,30 @@ export const dict = {
   "settings.indexing.qdrantApiKey.description": "Voliteľný API kľúč pre inštanciu Qdrant.",
   "settings.indexing.qdrantApiKey.placeholder": "Voliteľný API kľúč",
   "settings.indexing.tuning.description": "Pokročilý parameter vyhľadávania a dávkovania.",
+  "settings.observability.title": "Pozorovateľnosť",
+  "settings.observability.globalEnable.title": "Povoliť globálne",
+  "settings.observability.globalEnable.description":
+    "Povoliť export pozorovateľnosti OpenTelemetry (logy do Loki, trasy do Tempo) pre každý pracovný priestor.",
+  "settings.observability.projectEnable.title": "Povoliť pre tento projekt",
+  "settings.observability.projectEnable.description":
+    "Povoliť pozorovateľnosť pre tento pracovný priestor, keď je globálna pozorovateľnosť vypnutá.",
+  "settings.observability.projectEnable.disabledTooltip":
+    "Globálna pozorovateľnosť je povolená, tento projekt je už pokrytý.",
+  "settings.observability.includePayload.title": "Zahrnúť celý obsah",
+  "settings.observability.includePayload.description":
+    "Zahrnúť úplné požiadavky/odpovede v logoch a trasách. Predvolené: vypnuté (redigované). Povoľte len pre ladenie — môže odhaliť citlivé údaje.",
+  "settings.observability.skipTlsVerify.title": "Preskočiť TLS overenie",
+  "settings.observability.skipTlsVerify.description":
+    "Preskočiť overovanie TLS certifikátu. Vyžaduje sa pre samopodpísané alebo firemné CA certifikáty.",
+  "settings.observability.lokiUrl.title": "Loki URL",
+  "settings.observability.lokiUrl.description":
+    "Loki OTLP HTTP koncový bod. SDK automaticky pridá /v1/logs. Pre natívny OTLP rozhranie Loki použite základnú URL /otlp.",
+  "settings.observability.tempoUrl.title": "Tempo URL",
+  "settings.observability.tempoUrl.description":
+    "Tempo OTLP HTTP koncový bod. SDK automaticky pridá /v1/traces.",
+  "settings.observability.caCertPath.title": "Cesta k CA certifikátu",
+  "settings.observability.caCertPath.description":
+    "Cesta k PEM súboru CA certifikátu pre samopodpísané alebo firemné SSL. Náhradne použite env premenné KILO_TLS_CA_BUNDLE_PATH / SSL_CERT_FILE / NODE_EXTRA_CA_CERTS.",
   "settings.experimental.title": "Experimentálne",
   "settings.language.title": "Jazyk",
   "settings.aboutKiloCode.title": "O Kilo Code",

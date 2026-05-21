@@ -3,14 +3,14 @@ import { describe, expect, test } from "bun:test"
 import { Config } from "../../../src/config/config"
 
 describe("Config.Info experimental.openTelemetry default", () => {
-  test("defaults to true when experimental is set without openTelemetry", () => {
+  test("defaults to false when experimental is set without openTelemetry", () => {
     const parsed = Config.Info.zod.parse({ experimental: {} })
-    expect(parsed.experimental?.openTelemetry).toBe(true)
+    expect(parsed.experimental?.openTelemetry).toBe(false)
   })
 
-  test("defaults to true when openTelemetry is explicitly undefined", () => {
+  test("defaults to false when openTelemetry is explicitly undefined", () => {
     const parsed = Config.Info.zod.parse({ experimental: { openTelemetry: undefined } })
-    expect(parsed.experimental?.openTelemetry).toBe(true)
+    expect(parsed.experimental?.openTelemetry).toBe(false)
   })
 
   test("respects explicit false", () => {

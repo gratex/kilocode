@@ -8,6 +8,7 @@ import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
 import * as Session from "./session"
 import { LLM } from "./llm"
+import type { ModelMessage } from "ai" // kilocode_change
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
 import { PartID } from "./schema"
@@ -20,6 +21,7 @@ import { Question } from "@/question"
 import { KiloSessionProcessor, type ReviewTelemetry } from "@/kilocode/session/processor" // kilocode_change
 import { Suggestion } from "@/kilocode/suggestion" // kilocode_change
 import { NotFoundError } from "@/storage/storage" // kilocode_change
+import * as Observability from "@/kilocode/observability" // kilocode_change
 import { errorMessage } from "@/util/error"
 import * as Log from "@opencode-ai/core/util/log"
 import { isRecord } from "@/util/record"
@@ -79,6 +81,8 @@ interface ProcessorContext extends Input {
   reasoningMap: Record<string, MessageV2.ReasoningPart>
   stepStart: number // kilocode_change
   step: { reasoning: boolean; text: boolean; tool: boolean } // kilocode_change
+  stepInputMessages: ModelMessage[] | undefined // kilocode_change - OTEL payload capture
+  stepOutputText: string // kilocode_change - OTEL payload capture
 }
 
 type StreamEvent = Event
@@ -138,6 +142,8 @@ export const layer: Layer.Layer<
         telemetry: input.telemetry, // kilocode_change
         stepStart: 0, // kilocode_change
         step: { reasoning: false, text: false, tool: false }, // kilocode_change
+        stepInputMessages: undefined, // kilocode_change
+        stepOutputText: "", // kilocode_change
       }
       let aborted = false
       const ac = new AbortController() // kilocode_change — abort controller for offline handler
@@ -417,6 +423,7 @@ export const layer: Layer.Layer<
           case "start-step":
             ctx.stepStart = performance.now() // kilocode_change
             ctx.step = { reasoning: false, text: false, tool: false } // kilocode_change
+            ctx.stepOutputText = "" // kilocode_change - reset output text for this step
             // kilocode_change start - pass sessionID + messageID so the slow-repo prompt/progress indicator can attach
             if (!ctx.snapshot)
               ctx.snapshot = yield* snapshot.track({ sessionID: ctx.sessionID, messageID: ctx.assistantMessage.id })
@@ -447,6 +454,23 @@ export const layer: Layer.Layer<
               elapsed: Math.round(performance.now() - (ctx.stepStart || performance.now())),
               telemetry: ctx.telemetry,
             })
+            // kilocode_change start - OTEL observability: emit real LLM completion span + log
+            Observability.Track.llmCompletion({
+              sessionId: ctx.sessionID,
+              apiProvider: ctx.model.providerID,
+              modelId: ctx.model.id,
+              inputTokens: usage.tokens.input,
+              outputTokens: usage.tokens.output,
+              reasoningTokens: usage.tokens.reasoning,
+              cacheReadTokens: usage.tokens.cache.read,
+              cacheWriteTokens: usage.tokens.cache.write,
+              cost: usage.cost,
+              duration: Math.round(performance.now() - (ctx.stepStart || performance.now())),
+              litellmCallId: (value.providerMetadata as any)?.["litellm"]?.["call_id"],
+              request: ctx.stepInputMessages,
+              response: ctx.stepOutputText || undefined,
+            })
+            // kilocode_change end
             // kilocode_change end
             ctx.assistantMessage.finish = value.finishReason
             // kilocode_change start - capture any subagent cost propagated by tool calls during this step (#6321)
@@ -541,6 +565,7 @@ export const layer: Layer.Layer<
           case "text-delta":
             if (!ctx.currentText) return
             ctx.currentText.text += value.text
+            ctx.stepOutputText += value.text // kilocode_change - accumulate for OTEL
             if (value.text.trim()) ctx.step.text = true // kilocode_change
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
             yield* session.updatePartDelta({
@@ -678,6 +703,7 @@ export const layer: Layer.Layer<
         ctx.needsCompaction = false
         ctx.compactionError = undefined // kilocode_change
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
+        ctx.stepInputMessages = streamInput.messages // kilocode_change - capture for OTEL
 
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {

@@ -172,6 +172,14 @@ let cli = yargs(args) // kilocode_change
     }
 
     Telemetry.trackCliStart()
+
+    // kilocode_change start - Initialize OpenTelemetry observability
+    const { Observability } = await import("@/kilocode/observability")
+    await Observability.init({
+      config: globalCfg.observability,
+      version: InstallationVersion,
+      machineId: await (await import("@kilocode/kilo-telemetry")).Identity.getMachineId(),
+    })
     // kilocode_change end
 
     const marker = path.join(Global.Path.data, "kilo.db")
@@ -323,6 +331,10 @@ try {
   const exitCode = typeof process.exitCode === "number" ? process.exitCode : undefined
   Telemetry.trackCliExit(exitCode)
   await Telemetry.shutdown()
+
+  // Shutdown OTEL observability (flush pending spans/logs)
+  const { Observability } = await import("@/kilocode/observability")
+  await Observability.shutdown()
   // kilocode_change end
 
   await InstanceStore.disposeAllInstances() // kilocode_change - safety net disposal (no-op if already disposed)

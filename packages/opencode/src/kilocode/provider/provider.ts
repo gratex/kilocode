@@ -177,28 +177,55 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
       // (/key/info) which are at the root level.
       const sdkBaseURL = baseURL && !baseURL.endsWith("/v1") ? `${baseURL.replace(/\/+$/, "")}/v1` : baseURL
 
+      // Per-request call_id store: the fetch wrapper captures x-litellm-call-id
+      // from the response header, and the stream extractor reads it via getCallId().
+      // This avoids injecting invalid SSE chunks into the stream.
+      let lastCallId: string | undefined
+
       return {
         autoload: hasKey && !!baseURL,
         options: {
           ...(sdkBaseURL ? { baseURL: sdkBaseURL } : {}),
           ...(hasKey ? {} : { apiKey: "anonymous" }),
           // Intercept fetch to: (a) disable TLS verification for self-signed certs,
-          // (b) capture x-litellm-response-cost header for non-streaming responses.
-          // For streaming, the header is 0.0 (cost unknown until stream ends), so
+          // (b) capture x-litellm-response-cost header for non-streaming responses,
+          // (c) capture x-litellm-call-id for cross-system trace correlation.
+          // For streaming, the cost header is 0.0 (cost unknown until stream ends), so
           // cost is extracted from SSE chunks via createStreamExtractor below.
           fetch: async (url: any, init?: any) => {
-            const res = await fetch(url, { ...init, tls: { rejectUnauthorized: false } } as RequestInit)
+            // Inject x-litellm-call-id header if not already present
+            const callId = (init?.headers as Record<string, string>)?.["x-litellm-call-id"] ?? crypto.randomUUID()
+            const headers = new Headers(init?.headers as Record<string, string> ?? {})
+            if (!headers.has("x-litellm-call-id")) {
+              headers.set("x-litellm-call-id", callId)
+            }
+            const patchedInit = { ...init, headers }
+            const res = await fetch(url, { ...patchedInit, tls: { rejectUnauthorized: false } } as RequestInit)
             const costHdr = res.headers.get("x-litellm-response-cost")
+            const responseCallId = res.headers.get("x-litellm-call-id") ?? callId
             const ct = res.headers.get("content-type") ?? ""
-            kiloDebug.log("[Kilo Debug] fetch wrapper:", { costHdr, contentType: ct, url: typeof url === "string" ? url.slice(0, 80) : url })
+            kiloDebug.log("[Kilo Debug] fetch wrapper:", { costHdr, callId: responseCallId, contentType: ct, url: typeof url === "string" ? url.slice(0, 80) : url })
+
+            // Store call_id for the stream extractor to read
+            lastCallId = responseCallId
+
+            // For non-streaming JSON responses, inject cost + call_id into body
             const cost = parseFloat(costHdr ?? "")
+            if (ct.includes("application/json")) {
+              const text = await res.text()
+              let body: any
+              try { body = JSON.parse(text) } catch { return new Response(text, { status: res.status, headers: res.headers }) }
+              if (Number.isFinite(cost) && cost !== 0) body["_litellm_cost"] = cost
+              if (responseCallId) body["_litellm_call_id"] = responseCallId
+              return new Response(JSON.stringify(body), { status: res.status, headers: res.headers })
+            }
+
+            // For streaming SSE responses, return as-is.
+            // call_id is stored in lastCallId and read by buildMetadata().
+            // We do NOT inject synthetic SSE chunks — that breaks the OpenAI
+            // chunk validation schema.
             if (!Number.isFinite(cost) || cost === 0) return res
-            if (!ct.includes("application/json")) return res
-            const text = await res.text()
-            let body: any
-            try { body = JSON.parse(text) } catch { return new Response(text, { status: res.status, headers: res.headers }) }
-            body["_litellm_cost"] = cost
-            return new Response(JSON.stringify(body), { status: res.status, headers: res.headers })
+            return res
           },
           // metadataExtractor captures cost from both non-streaming and streaming responses.
           // Non-streaming: reads _litellm_cost injected by fetch wrapper from x-litellm-response-cost header.
@@ -206,12 +233,21 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
           // (available when LiteLLM proxy has include_cost_in_streaming_usage: true).
           // When neither source provides cost, Session.getUsage() falls back to
           // token-based calculation using model costs from /v1/model/info.
+          // call_id is read from lastCallId (set by the fetch wrapper per request).
           metadataExtractor: {
             extractMetadata: async ({ parsedBody }: { parsedBody: unknown }) => {
               const cost = (parsedBody as any)?.["_litellm_cost"]
-              kiloDebug.log("[Kilo Debug] extractMetadata:", { cost, hasLitellmCost: cost !== undefined })
-              if (typeof cost !== "number" || !Number.isFinite(cost)) return undefined
-              return { litellm: { cost_breakdown: { total_cost: cost } } }
+              const callId = (parsedBody as any)?.["_litellm_call_id"] ?? lastCallId
+              kiloDebug.log("[Kilo Debug] extractMetadata:", { cost, callId, hasLitellmCost: cost !== undefined })
+              const litellm: Record<string, any> = {}
+              if (typeof cost === "number" && Number.isFinite(cost)) {
+                litellm.cost_breakdown = { total_cost: cost }
+              }
+              if (callId && typeof callId === "string") {
+                litellm.call_id = callId
+              }
+              if (Object.keys(litellm).length === 0) return undefined
+              return { litellm }
             },
             createStreamExtractor: () => {
               let streamCost: number | undefined
@@ -246,6 +282,11 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
                     // via input.metadata?.["litellm"]?.["usage"]?.["prompt_tokens_details"]?.["cached_tokens"]
                     // and input.metadata?.["litellm"]?.["usage"]?.["cache_creation_input_tokens"]
                     litellm.usage = lastUsage
+                  }
+                  // Read call_id from the module-level variable set by the fetch wrapper.
+                  // This avoids injecting invalid SSE chunks into the stream.
+                  if (lastCallId && typeof lastCallId === "string") {
+                    litellm.call_id = lastCallId
                   }
                   if (Object.keys(litellm).length === 0) return undefined
                   return { litellm }

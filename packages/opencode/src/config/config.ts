@@ -49,6 +49,7 @@ import { ZodOverride } from "@/util/effect-zod"
 import { KilocodeConfig } from "../kilocode/config/config"
 import { KilocodeDefaultPlugins } from "@/kilocode/config/default-plugins"
 import { IndexingConfig as KiloIndexingConfig } from "@kilocode/kilo-indexing/config"
+import { ObservabilityConfig as KiloObservabilityConfig } from "@/kilocode/observability/config"
 import { makeRuntime } from "@/effect/run-service"
 import { unique } from "remeda"
 // kilocode_change end
@@ -119,6 +120,8 @@ const Percent = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOr
 
 // kilocode_change - KiloIndexingConfig is still a Zod schema; bridge via ZodOverride
 const IndexingRef = Schema.Any.annotate({ [ZodOverride]: KiloIndexingConfig })
+// kilocode_change - ObservabilityConfig is native Effect Schema, no ZodOverride needed
+const ObservabilityRef = KiloObservabilityConfig
 
 // The Effect Schema is the canonical source of truth. The `.zod` compatibility
 // surface is derived so existing Hono validators keep working without a parallel
@@ -182,6 +185,9 @@ export const Info = Schema.Struct({
     description: "Automatically collapse reasoning blocks after the agent finishes writing them",
   }),
   indexing: Schema.optional(IndexingRef).annotate({ description: "Codebase indexing configuration" }), // kilocode_change
+  observability: Schema.optional(ObservabilityRef).annotate({
+    description: "OpenTelemetry observability configuration (logs to Loki, traces to Tempo)",
+  }), // kilocode_change
   terminal_command_display: Schema.optional(Schema.Literals(["expanded", "collapsed"])).annotate({
     description: "Controls whether terminal command blocks are expanded or collapsed by default in the VS Code chat UI",
   }),

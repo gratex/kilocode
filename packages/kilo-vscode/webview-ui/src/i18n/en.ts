@@ -1084,6 +1084,30 @@ export const dict = {
   "settings.indexing.qdrantApiKey.description": "Optional API key for the Qdrant instance.",
   "settings.indexing.qdrantApiKey.placeholder": "Optional API key",
   "settings.indexing.tuning.description": "Advanced search and batching parameter.",
+  "settings.observability.title": "Observability",
+  "settings.observability.globalEnable.title": "Enable globally",
+  "settings.observability.globalEnable.description":
+    "Enable OpenTelemetry observability export (logs to Loki, traces to Tempo) for every workspace.",
+  "settings.observability.projectEnable.title": "Enable for this project",
+  "settings.observability.projectEnable.description":
+    "Enable observability for this workspace when global observability is off.",
+  "settings.observability.projectEnable.disabledTooltip":
+    "Global observability is enabled, so this project is already covered.",
+  "settings.observability.includePayload.title": "Include full payload",
+  "settings.observability.includePayload.description":
+    "Include full request/response payloads in logs and traces. Default: off (redacted). Enable only for debugging — may expose sensitive data.",
+  "settings.observability.skipTlsVerify.title": "Skip TLS verification",
+  "settings.observability.skipTlsVerify.description":
+    "Skip TLS certificate verification. Required for self-signed or corporate CA certificates.",
+  "settings.observability.lokiUrl.title": "Loki URL",
+  "settings.observability.lokiUrl.description":
+    "Loki OTLP HTTP endpoint. The SDK appends /v1/logs automatically. For Loki's native OTLP, use the /otlp base URL.",
+  "settings.observability.tempoUrl.title": "Tempo URL",
+  "settings.observability.tempoUrl.description":
+    "Tempo OTLP HTTP endpoint. The SDK appends /v1/traces automatically.",
+  "settings.observability.caCertPath.title": "CA certificate path",
+  "settings.observability.caCertPath.description":
+    "Path to CA certificate PEM file for self-signed or corporate SSL. Falls back to KILO_TLS_CA_BUNDLE_PATH / SSL_CERT_FILE / NODE_EXTRA_CA_CERTS env vars.",
   "settings.experimental.title": "Experimental",
   "settings.language.title": "Language",
   "settings.aboutKiloCode.title": "About Kilo Code",
