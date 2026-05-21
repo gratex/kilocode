@@ -200,9 +200,9 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
     const spend = liteLLMSpend()
     if (!spend) return undefined
     return {
-      spent: `$${spend.spent.toFixed(2)}`,
-      remaining: `$${spend.remaining.toFixed(2)}`,
-      limit: `$${spend.limit.toFixed(2)}`,
+      spent: spend.spent,
+      remaining: spend.remaining,
+      limit: spend.limit,
       pct: Math.round(spend.percentageUsed),
       resetDate: spend.resetDate,
     }
@@ -292,9 +292,20 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
           </Show>
           <Show when={liteLLMBudget()}>
             {(budget) => (
-              <div style={{ "font-size": "11px", color: "var(--vscode-descriptionForeground)", "margin-left": "4px" }}>
-                Budget: {budget().pct}% used ({budget().remaining} / {budget().limit})
-              </div>
+              <Tooltip
+                value={
+                  <div style={{ "text-align": "left", "white-space": "nowrap" }}>
+                    <div>{`$${budget().remaining.toFixed(2)} left`}</div>
+                    <div>{`$${budget().limit.toFixed(2)} total budget`}</div>
+                    {budget().resetDate && <div>{`Budget resets at ${budget().resetDate}`}</div>}
+                  </div>
+                }
+                placement="bottom"
+              >
+                <div style={{ "font-size": "11px", color: "var(--vscode-descriptionForeground)", "margin-left": "4px" }}>
+                  Budget: {budget().pct}% used
+                </div>
+              </Tooltip>
             )}
           </Show>
           <Show when={!props.readonly}>
