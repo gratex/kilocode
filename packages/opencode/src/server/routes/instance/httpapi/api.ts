@@ -31,6 +31,7 @@ import { RemoteApi } from "@/kilocode/server/httpapi/groups/remote"
 import { SessionImportApi } from "@/kilocode/server/httpapi/groups/session-import"
 import { SuggestionApi } from "@/kilocode/server/httpapi/groups/suggestion"
 import { TelemetryApi } from "@/kilocode/server/httpapi/groups/telemetry"
+import { LiteLLMApi } from "@/kilocode/server/httpapi/groups/litellm"
 // kilocode_change end
 
 // SSE event schemas built from the same BusEvent/SyncEvent registries that
@@ -67,6 +68,7 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(SessionImportApi)
   .addHttpApi(SuggestionApi)
   .addHttpApi(TelemetryApi)
+  .addHttpApi(LiteLLMApi)
 // kilocode_change end
 
 export const OpenCodeHttpApi = HttpApi.make("opencode")
