@@ -67,7 +67,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const system = [
     [
       // kilocode_change start - soul defines core identity and personality
-      ...(isOpenaiOauth ? [] : [SystemPrompt.soul()]),
+      ...(isOpenaiOauth ? [] : [yield* Effect.promise(() => SystemPrompt.soul())]),
       // kilocode_change end
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
       ...input.system,
@@ -103,7 +103,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
   if (isOpenaiOauth) {
     // kilocode_change start - prepend soul to instructions
-    options.instructions = SystemPrompt.soul() + "\n" + system.join("\n")
+    options.instructions = (yield* Effect.promise(() => SystemPrompt.soul())) + "\n" + system.join("\n")
     // kilocode_change end
   }
 
@@ -221,6 +221,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           }),
       // kilocode_change start - headers for kilo provider
       ...(isKilo && input.agent.name ? { "x-kilocode-mode": input.agent.name.toLowerCase() } : {}),
+      // kilocode_change - send x-kilocode-mode to all providers when GTI_KILO_X_KILOCODE_MODE=1
+      ...(!isKilo && (process.env.GTI_KILO_X_KILOCODE_MODE === "1" || process.env.GTI_KILO_X_KILOCODE_MODE === "true") && input.agent.name ? { "x-kilocode-mode": input.agent.name.toLowerCase() } : {}),
       ...(isKilo && kiloProjectId ? { [HEADER_PROJECTID]: kiloProjectId } : {}),
       ...(isKilo && machineId ? { [HEADER_MACHINEID]: machineId } : {}),
       ...(isKilo ? { [HEADER_TASKID]: input.sessionID } : {}),
