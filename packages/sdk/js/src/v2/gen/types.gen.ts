@@ -1623,6 +1623,7 @@ export type Config = {
     [key: string]: string
   }
   default_agent?: string
+  system_soul?: string
   username?: string
   mode?: {
     build?: AgentConfig

@@ -31,6 +31,7 @@ import { KilocodeSystemPrompt } from "../kilocode/system-prompt"
 import { isLing } from "../kilocode/model-match"
 import { Config } from "@/config/config"
 import * as KiloReference from "@/kilocode/reference"
+import { makeRuntime } from "@/effect/run-service"
 // kilocode_change end
 
 // kilocode_change start
@@ -38,8 +39,14 @@ export function instructions() {
   return PROMPT_CODEX.trim()
 }
 
-export function soul() {
-  return SOUL.trim()
+// soul() reads the merged project+global config for system_soul override or the built-in SOUL prompt.
+// Uses makeRuntime pattern (same as org-sources, project-id) so soul() is a plain async function
+// with no Effect service requirements leaking to callers.
+const { runPromise: runConfig } = makeRuntime(Config.Service, Config.defaultLayer)
+
+export async function soul() {
+  const config = await runConfig((svc) => svc.get())
+  return (config.system_soul ?? SOUL).trim()
 }
 // kilocode_change end
 
@@ -94,7 +101,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
 
-export const layer = Layer.effect(
+export const layer = Layer.effect( // kilocode_change
   Service,
   Effect.gen(function* () {
     const skill = yield* Skill.Service

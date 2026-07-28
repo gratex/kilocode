@@ -145,8 +145,10 @@ async function resolveLoadedPlugins<T extends { plugin?: ConfigPluginV1.Spec[] }
   return config
 }
 
+
 export type Info = ConfigV1.Info & {
   // kilocode_change - keep exported so existing Config.Info call sites don't need repo-wide migration to ConfigV1.Info
+
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]
