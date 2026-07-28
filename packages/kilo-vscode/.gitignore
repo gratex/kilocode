@@ -1,5 +1,6 @@
 bin/
 out/
+*.vsix
 .vscode-test/
 storybook-static/
 test-results/
