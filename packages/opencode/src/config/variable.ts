@@ -52,7 +52,11 @@ export async function substitute(input: SubstituteInput) {
   const escape = input.escapeJson ?? true // kilocode_change
   // kilocode_change start - untrusted (project) config cannot read environment variables. {env:} has no safe
   // scoped form, so it is rejected outright; {file:} is allowed but confined to fileScope.root below.
-  const trusted = input.trusted ?? false
+  // GTI_BLOCK_UNTRUSTED_PROJECT_CONFIG=0 disables the block: {env:}/{file:} allowed in project config (opt-in for Gratex)
+  const trusted =
+    (input.trusted ?? false) ||
+    process.env.GTI_BLOCK_UNTRUSTED_PROJECT_CONFIG === "false" ||
+    process.env.GTI_BLOCK_UNTRUSTED_PROJECT_CONFIG === "0"
   if (!trusted) {
     const active = Array.from(input.text.matchAll(/\{env:[^}]+\}/g)).find((m) => !commented(input.text, m.index))
     if (active) {
