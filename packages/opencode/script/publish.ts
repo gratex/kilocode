@@ -16,6 +16,14 @@ async function publish(dir: string, name: string, version: string) {
   // GitHub artifact downloads can drop the executable bit, and Docker uses the
   // unpacked dist binaries directly rather than the published tarball.
   if (process.platform !== "win32") await $`chmod -R 755 .`.cwd(dir)
+  // Generated/modified by AI Kilo Code 7.4.16-gratex-001, used model gti-litellm/laguna-s-2.1
+  // kilocode_change start - allow local pack-only runs without contacting the npm registry
+  if (process.env.KILO_SKIP_PUBLISH) {
+    console.log(`packing ${name}@${version} (npm publish skipped: KILO_SKIP_PUBLISH set)`)
+    await $`bun pm pack`.cwd(dir)
+    return
+  }
+  // kilocode_change end
   if (await published(name, version)) {
     console.log(`already published ${name}@${version}`)
     return
