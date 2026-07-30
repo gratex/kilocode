@@ -20,6 +20,7 @@ import { BrowserAutomationService } from "./services/browser-automation"
 import { TelemetryEventName, TelemetryProxy } from "./services/telemetry"
 import { registerCommitMessageService } from "./services/commit-message"
 import { registerCodeActions, registerTerminalActions, KiloCodeActionProvider } from "./services/code-actions"
+import { registerCustomActions } from "./services/code-actions/custom-actions"
 import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
@@ -564,6 +565,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Register code actions (editor context menus, terminal context menus, keyboard shortcuts)
   registerCodeActions(context, provider, agentManagerProvider, activeTabProvider)
   registerTerminalActions(context, provider, agentManagerProvider)
+  registerCustomActions(context, provider, agentManagerProvider, activeTabProvider)
 
   // Register CodeActionProvider (lightbulb quick fixes)
   context.subscriptions.push(

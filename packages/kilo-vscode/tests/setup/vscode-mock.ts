@@ -73,6 +73,12 @@ const mockVscode = {
       delete: async () => {},
       stat: async () => ({ type: 1, ctime: 0, mtime: 0, size: 0 }),
     },
+    createFileSystemWatcher: () => ({
+      onDidCreate: () => ({ dispose: noop }),
+      onDidChange: () => ({ dispose: noop }),
+      onDidDelete: () => ({ dispose: noop }),
+      dispose: noop,
+    }),
   },
   StatusBarAlignment: { Left: 1, Right: 2 },
   ThemeColor: class {
@@ -130,7 +136,11 @@ const mockVscode = {
   },
   CodeActionKind: {
     QuickFix: kind("quickfix"),
+    Refactor: kind("refactor"),
+    RefactorExtract: kind("refactor.extract"),
+    RefactorInline: kind("refactor.inline"),
     RefactorRewrite: kind("refactor.rewrite"),
+    Source: kind("source"),
   },
   ConfigurationTarget: {
     Global: 1,
@@ -167,6 +177,12 @@ const mockVscode = {
       public insertText: string,
       public range?: unknown,
       public command?: unknown,
+    ) {}
+  },
+  RelativePattern: class {
+    constructor(
+      public base: string | { fsPath: string },
+      public pattern: string,
     ) {}
   },
   Disposable: class {
