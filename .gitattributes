@@ -1,10 +1,8 @@
 # Enforce LF line endings for all text files
 * text=auto eol=lf
-
 # Git LFS tracking for binary/media files
 *.gif filter=lfs diff=lfs merge=lfs -text
 *.mp4 filter=lfs diff=lfs merge=lfs -text
-
 # Visual regression baseline snapshots
 packages/kilo-ui/tests/**/*.png filter=lfs diff=lfs merge=lfs -text
 packages/kilo-vscode/tests/**/*.png filter=lfs diff=lfs merge=lfs -text
@@ -39,3 +37,6 @@ packages/kilo-docs/pages/code-with-ai/platforms/cli-reference.md linguist-genera
 # Upstream generated migration artifacts
 packages/core/migration/**/snapshot.json linguist-generated
 packages/core/src/database/migration.gen.ts linguist-generated
+
+# Kilo VS Code packaged extensions (gratex distributions)
+*.vsix filter=lfs diff=lfs merge=lfs -text
