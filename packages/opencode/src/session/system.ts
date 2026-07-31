@@ -39,6 +39,7 @@ export function instructions() {
 }
 
 export function soul() {
+  if (process.env.GTI_KILO_SOULLESS !== "off") return "" // kilocode_change: soulless by default
   return SOUL.trim()
 }
 // kilocode_change end
