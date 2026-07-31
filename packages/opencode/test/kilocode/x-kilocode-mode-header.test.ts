@@ -1,16 +1,15 @@
 // kilocode_change - new file
 /**
- * Tests for the GTI_KILO_X_KILOCODE_MODE toggle in request.ts.
+ * Tests for the GTI_KILO_X_KILOCODE_MODE_HEADER toggle in request.ts.
  *
- * When GTI_KILO_X_KILOCODE_MODE=1, the x-kilocode-mode header is sent to all
- * providers (not just the Kilo Gateway). When unset, the header is absent for
- * non-Kilo providers.
+ * By default (unset), the x-kilocode-mode header is sent to all providers.
+ * When GTI_KILO_X_KILOCODE_MODE_HEADER=off, the header is sent only to Kilo Gateway.
  *
- * Run with flag ON:
- *   GTI_KILO_X_KILOCODE_MODE=1 bun test ./test/kilocode/x-kilocode-mode-header.test.ts
+ * Run with default (header to all):
+ *   env -u GTI_KILO_X_KILOCODE_MODE_HEADER bun test ./test/kilocode/x-kilocode-mode-header.test.ts
  *
- * Run with flag OFF (default):
- *   env -u GTI_KILO_X_KILOCODE_MODE bun test ./test/kilocode/x-kilocode-mode-header.test.ts
+ * Run with header restricted to Kilo Gateway:
+ *   GTI_KILO_X_KILOCODE_MODE_HEADER=off bun test ./test/kilocode/x-kilocode-mode-header.test.ts
  */
 import { afterAll, beforeAll, beforeEach, describe, expect } from "bun:test"
 import path from "path"
@@ -26,15 +25,14 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
 
 // --- flag state ---
-const flagOn =
-  process.env.GTI_KILO_X_KILOCODE_MODE === "1" || process.env.GTI_KILO_X_KILOCODE_MODE === "true"
+const headerDisabled = process.env.GTI_KILO_X_KILOCODE_MODE_HEADER === "off"
 
 // --- test layer ---
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
 
 // skipIf helpers bound to it.instance
-const whenOn = flagOn ? it.instance : it.instance.skip
-const whenOff = flagOn ? it.instance.skip : it.instance
+const whenAll = headerDisabled ? it.instance.skip : it.instance
+const whenKiloOnly = headerDisabled ? it.instance : it.instance.skip
 
 // --- fake server ---
 type Capture = { url: URL; headers: Headers; body: Record<string, unknown> }
@@ -142,9 +140,9 @@ function mkUser(
 const PROVIDER_ID = "vivgrid"
 const MODEL_ID = "gemini-3.1-pro-preview"
 
-describe("GTI_KILO_X_KILOCODE_MODE header (non-Kilo provider)", () => {
-  whenOn(
-    "sends x-kilocode-mode header to non-Kilo provider when GTI_KILO_X_KILOCODE_MODE=1",
+describe("GTI_KILO_X_KILOCODE_MODE_HEADER (non-Kilo provider)", () => {
+  whenAll(
+    "sends x-kilocode-mode header to non-Kilo provider by default (all providers)",
     () =>
       Effect.gen(function* () {
         const fixture = loadFixture(PROVIDER_ID, MODEL_ID)
@@ -160,7 +158,7 @@ describe("GTI_KILO_X_KILOCODE_MODE header (non-Kilo provider)", () => {
           ProviderV2.ID.make(PROVIDER_ID),
           ModelV2.ID.make(fixture.model.id),
         )
-        const sessionID = SessionID.make("session-test-mode-on")
+        const sessionID = SessionID.make("session-test-header-all")
         const agent = mkAgent("code")
         const user = mkUser(sessionID, PROVIDER_ID, fixture.model.id)
 
@@ -193,8 +191,8 @@ describe("GTI_KILO_X_KILOCODE_MODE header (non-Kilo provider)", () => {
     },
   )
 
-  whenOff(
-    "omits x-kilocode-mode header for non-Kilo provider when GTI_KILO_X_KILOCODE_MODE is unset",
+  whenKiloOnly(
+    "omits x-kilocode-mode header for non-Kilo provider when GTI_KILO_X_KILOCODE_MODE_HEADER=off",
     () =>
       Effect.gen(function* () {
         const fixture = loadFixture(PROVIDER_ID, MODEL_ID)
@@ -210,7 +208,7 @@ describe("GTI_KILO_X_KILOCODE_MODE header (non-Kilo provider)", () => {
           ProviderV2.ID.make(PROVIDER_ID),
           ModelV2.ID.make(fixture.model.id),
         )
-        const sessionID = SessionID.make("session-test-mode-off")
+        const sessionID = SessionID.make("session-test-header-kilo-only")
         const agent = mkAgent("code")
         const user = mkUser(sessionID, PROVIDER_ID, fixture.model.id)
 

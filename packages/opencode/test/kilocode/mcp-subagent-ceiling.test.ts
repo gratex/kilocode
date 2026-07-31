@@ -1,6 +1,6 @@
 // kilocode_change - new file
 /**
- * Tests for the GTI_KILO_MCP_SUBAGENT_CEILING toggle in KiloTask.
+ * Tests for the GTI_KILO_NO_MCP_SUBAGENT_CEILING toggle in KiloTask.
  *
  * The toggle only affects the three ceiling-specific functions:
  *   inherited(), permissions(), merge()
@@ -8,11 +8,14 @@
  * validate(), nestedTask(), and resolveModel() are NOT part of the ceiling
  * toggle — they are tested unconditionally below.
  *
+ * By default (unset), ceiling is ON — subagents inherit deny rules from parent.
+ * When GTI_KILO_NO_MCP_SUBAGENT_CEILING=off, ceiling is removed (opencode behavior).
+ *
  * Run with ceiling ON (default):
- *   env -u GTI_KILO_MCP_SUBAGENT_CEILING bun test ./test/kilocode/mcp-subagent-ceiling.test.ts
+ *   env -u GTI_KILO_NO_MCP_SUBAGENT_CEILING bun test ./test/kilocode/mcp-subagent-ceiling.test.ts
  *
  * Run with ceiling OFF:
- *   GTI_KILO_MCP_SUBAGENT_CEILING=false bun test ./test/kilocode/mcp-subagent-ceiling.test.ts
+ *   GTI_KILO_NO_MCP_SUBAGENT_CEILING=off bun test ./test/kilocode/mcp-subagent-ceiling.test.ts
  */
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
@@ -26,7 +29,7 @@ const ref = {
   modelID: ModelV2.ID.make("test-model"),
 }
 
-const ceilingOff = process.env.GTI_KILO_MCP_SUBAGENT_CEILING === "false"
+const ceilingOff = process.env.GTI_KILO_NO_MCP_SUBAGENT_CEILING === "off"
 const whenOn = test.skipIf(ceilingOff)
 const whenOff = test.skipIf(!ceilingOff)
 
@@ -72,7 +75,7 @@ describe("KiloTask non-ceiling functions (always active)", () => {
   })
 })
 
-describe("KiloTask ceiling ON (default Kilo behavior)", () => {
+describe("KiloTask ceiling ON (default Gratex behavior)", () => {
   whenOn("inherited returns edit + bash + MCP deny rules from caller and session", () => {
     const caller = mkAgent("build", "primary", [
       { permission: "edit", pattern: "*", action: "deny" },
@@ -134,7 +137,7 @@ describe("KiloTask ceiling ON (default Kilo behavior)", () => {
   })
 })
 
-describe("KiloTask ceiling OFF (GTI_KILO_MCP_SUBAGENT_CEILING=false opencode behavior)", () => {
+describe("KiloTask ceiling OFF (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off opencode behavior)", () => {
   whenOff("inherited returns empty ruleset — no ceiling inheritance", () => {
     const caller = mkAgent("build", "primary", [{ permission: "edit", pattern: "*", action: "deny" }])
     const rules = KiloTask.inherited({ caller: caller as any, session: mkSession(), mcp: {} })

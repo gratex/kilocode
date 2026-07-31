@@ -199,9 +199,9 @@ export namespace KiloTask {
   })
 }
 
-// kilocode_change start - toggle switch: GTI_KILO_MCP_SUBAGENT_CEILING=false restores original opencode behavior
-const GTI_KILO_MCP_SUBAGENT_CEILING_OFF = process.env.GTI_KILO_MCP_SUBAGENT_CEILING === "false"
-if (GTI_KILO_MCP_SUBAGENT_CEILING_OFF) {
+// kilocode_change start - toggle switch: GTI_KILO_NO_MCP_SUBAGENT_CEILING=off restores original opencode behavior (ceiling ON by default)
+const GTI_KILO_NO_MCP_SUBAGENT_CEILING_OFF = process.env.GTI_KILO_NO_MCP_SUBAGENT_CEILING === "off"
+if (GTI_KILO_NO_MCP_SUBAGENT_CEILING_OFF) {
   Object.assign(KiloTask, {
     // opencode: no parent-ceiling inheritance — return empty ruleset
     inherited: (_input: Parameters<typeof KiloTask.inherited>[0]) => [],
