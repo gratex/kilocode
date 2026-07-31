@@ -1393,6 +1393,12 @@ export const layer = Layer.effect(
           if (disabled.has(providerID)) return false
           return true
         }
+        // kilocode_change start - GTI_KILO_EXPLICIT_PROVIDER_LIST_ONLY=1: only providers in enabled_providers are allowed
+        if (process.env.GTI_KILO_EXPLICIT_PROVIDER_LIST_ONLY === "1") {
+          const _allowed = new Set(cfg.enabled_providers ?? [])
+          isProviderAllowed = (providerID) => _allowed.has(providerID) && !disabled.has(providerID)
+        }
+        // kilocode_change end
 
         for (const hook of plugins) {
           const p = hook.provider
