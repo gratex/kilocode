@@ -69,9 +69,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   const isOpenaiOauth = input.provider.id === "openai" && input.auth?.type === "oauth"
   const system = [
     [
-      // kilocode_change start - soul defines core identity and personality
-      ...(isOpenaiOauth ? [] : [yield* Effect.promise(() => SystemPrompt.soul())]),
-      // kilocode_change end
+      ...(isOpenaiOauth ? [] : [SystemPrompt.soul()]),
       ...(input.agent.prompt ? [input.agent.prompt] : SystemPrompt.provider(input.model)),
       ...input.system,
       ...(input.user.system ? [input.user.system] : []),
@@ -117,7 +115,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   }
   if (isOpenaiOauth) {
     // kilocode_change start - prepend soul to instructions
-    options.instructions = (yield* Effect.promise(() => SystemPrompt.soul())) + "\n" + system.join("\n")
+    options.instructions = SystemPrompt.soul() + "\n" + system.join("\n")
     // kilocode_change end
   }
 
