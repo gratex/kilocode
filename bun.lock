@@ -389,7 +389,7 @@
     },
     "packages/kilo-vscode": {
       "name": "kilo-code",
-      "version": "7.4.17-gratex-002",
+      "version": "7.4.17-gratex-003",
       "dependencies": {
         "@anthropic-ai/sdk": "^0.39.0",
         "@kilocode/kilo-gateway": "workspace:*",
