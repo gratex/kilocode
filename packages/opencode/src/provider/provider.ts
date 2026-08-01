@@ -1393,13 +1393,6 @@ export const layer = Layer.effect(
           if (disabled.has(providerID)) return false
           return true
         }
-// kilocode_change start - GTI_KILO_EXPLICIT_PROVIDER_LIST_ONLY: only providers in cfg.provider keys are allowed (Gratex strict allowlist)
-        if (process.env.GTI_KILO_EXPLICIT_PROVIDER_LIST_ONLY !== "off") {
-          const configuredProviders = Object.keys(cfg.provider ?? {})
-          const _allowed = new Set(configuredProviders)
-          isProviderAllowed = (providerID) => _allowed.has(providerID) && !disabled.has(providerID)
-        }
-        // kilocode_change end
 
         for (const hook of plugins) {
           const p = hook.provider
@@ -1523,6 +1516,13 @@ export const layer = Layer.effect(
             parsed.models[modelID] = parsedModel
           }
           database[providerID] = parsed
+          // kilocode_change start - config-only providers (not in upstream database) must be added to providers
+          // so they survive the env-key check and the empty-models purge. Without this, providers like
+          // gti-litellm that rely on {env:} credentials and have no upstream database entry are silently dropped.
+          if (!providers[providerID]) {
+            providers[providerID] = parsed
+          }
+          // kilocode_change end
         }
 
         // kilocode_change start - load auths before env so OAuth plugins can override inherited credentials
