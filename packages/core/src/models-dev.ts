@@ -204,6 +204,9 @@ export const layer = Layer.effect(
     })
 
     const populate = Effect.gen(function* () {
+      // kilocode_change start - GTI: skip all built-in model sources (disable with GTI_KILO_DISABLE_BUILTIN_MODELS=off)
+      if (process.env.GTI_KILO_DISABLE_BUILTIN_MODELS !== "off") return {}
+      // kilocode_change end
       const fromDisk = yield* loadFromDisk
       if (fromDisk) return fromDisk
       const snapshot = yield* loadSnapshot

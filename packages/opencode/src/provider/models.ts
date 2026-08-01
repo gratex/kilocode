@@ -44,6 +44,9 @@ export const layer: Layer.Layer<Service, never, Core.Service | Config.Service | 
       const get = Effect.fn("ModelsDev.get")(function* () {
         const providers = overlay(yield* core.get())
         delete providers.kilo
+        // kilocode_change start - GTI: skip kilo and apertis injection (disable with GTI_KILO_DISABLE_BUILTIN_MODELS=off)
+        if (process.env.GTI_KILO_DISABLE_BUILTIN_MODELS !== "off") return providers
+        // kilocode_change end
 
         const cfg = yield* config.get()
         const disabled = new Set(cfg.disabled_providers ?? [])
