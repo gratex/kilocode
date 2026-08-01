@@ -245,7 +245,10 @@ export const layer = Layer.effect(
       )
     })
 
-    if (!Flag.KILO_DISABLE_MODELS_FETCH && !process.argv.includes("--get-yargs-completions")) {
+    // kilocode_change start - GTI: also disable refresh when GTI_KILO_DISABLE_BUILTIN_MODELS is active
+    const disableModelsFetch = Flag.KILO_DISABLE_MODELS_FETCH || process.env.GTI_KILO_DISABLE_BUILTIN_MODELS !== "off"
+    // kilocode_change end
+    if (!disableModelsFetch && !process.argv.includes("--get-yargs-completions")) {
       // Schedule.spaced runs the effect once, then waits between completions.
       yield* Effect.forkScoped(refresh().pipe(Effect.repeat(Schedule.spaced("60 minutes")), Effect.ignore))
     }
