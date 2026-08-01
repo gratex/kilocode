@@ -7,19 +7,12 @@
 //
 // Generated/modified by AI Kilo Code 7.4.17-gratex-003, used model gti-litellm/google/claude-sonnet-4-6
 
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { disposeAllInstances, provideInstanceEffect, tmpdirScoped } from "../fixture/fixture"
-import { markPluginDependenciesReady } from "../fixture/plugin"
-import { Auth } from "@/auth"
-import { Config } from "@/config/config"
+import { disposeAllInstances } from "../fixture/fixture"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
 import { Provider } from "@/provider/provider"
-import { RuntimeFlags } from "@/effect/runtime-flags"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 
@@ -54,47 +47,29 @@ const list = Provider.use.list()
 
 const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer))
 
-// --- GTI_KILO_DISABLE_BUILTIN_MODELS unset (Gratex default) ---
+// --- GTI_KILO_DISABLE_BUILTIN_MODELS unset ---
 
 it.instance(
-  "Gratex default: upstream providers blocked even with env API keys",
+  "GTI_KILO_DISABLE_BUILTIN_MODELS unset: no cfg.provider → provider list is empty",
   Effect.gen(function* () {
     yield* unsetProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS")
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
     yield* setProcessEnv("OPENAI_API_KEY", "test-openai-key")
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
-    expect(providers[ProviderV2.ID.openai]).toBeUndefined()
-  }),
-)
-
-it.instance(
-  "Gratex default: kilo provider not injected",
-  Effect.gen(function* () {
-    yield* unsetProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS")
-    const providers = yield* list
-    expect(providers[ProviderV2.ID.make("kilo")]).toBeUndefined()
-  }),
-)
-
-it.instance(
-  "Gratex default: apertis provider not injected",
-  Effect.gen(function* () {
-    yield* unsetProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS")
     yield* setProcessEnv("APERTIS_API_KEY", "test-apertis-key")
     const providers = yield* list
-    expect(providers[ProviderV2.ID.make("apertis")]).toBeUndefined()
+    expect(Object.keys(providers)).toEqual([])
   }),
 )
 
 it.instance(
-  "Gratex default: custom (non-upstream) cfg.provider entry loads via config-only path",
+  "GTI_KILO_DISABLE_BUILTIN_MODELS unset: only cfg.provider entries present — exactly those, nothing else",
   Effect.gen(function* () {
     yield* unsetProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("OPENAI_API_KEY", "test-openai-key")
+    yield* setProcessEnv("APERTIS_API_KEY", "test-apertis-key")
     const providers = yield* list
-    // gti-litellm has no upstream database entry → loads via config-only provider path in provider.ts
-    // regardless of whether the upstream catalog is empty
-    expect(providers[ProviderV2.ID.make("gti-litellm")]).toBeDefined()
+    expect(Object.keys(providers).sort()).toEqual(["gti-litellm"])
   }),
   {
     config: {
@@ -112,14 +87,13 @@ it.instance(
 )
 
 it.instance(
-  "Gratex default: multiple custom cfg.provider entries all load",
+  "GTI_KILO_DISABLE_BUILTIN_MODELS unset: multiple cfg.provider entries — exactly those, nothing else",
   Effect.gen(function* () {
     yield* unsetProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS")
+    yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
+    yield* setProcessEnv("OPENAI_API_KEY", "test-openai-key")
     const providers = yield* list
-    expect(providers[ProviderV2.ID.make("gti-litellm")]).toBeDefined()
-    expect(providers[ProviderV2.ID.make("gti-other")]).toBeDefined()
-    // upstream providers with env key are still blocked
-    expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
+    expect(Object.keys(providers).sort()).toEqual(["gti-litellm", "gti-other"])
   }),
   {
     config: {
@@ -146,7 +120,7 @@ it.instance(
 // --- GTI_KILO_DISABLE_BUILTIN_MODELS=off (upstream behaviour restored) ---
 
 it.instance(
-  "off: upstream providers load from env API keys",
+  "GTI_KILO_DISABLE_BUILTIN_MODELS=off: upstream providers load from env API keys",
   Effect.gen(function* () {
     yield* setProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS", "off")
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
@@ -158,7 +132,7 @@ it.instance(
 )
 
 it.instance(
-  "off: enabled_providers config still restricts (upstream behaviour intact)",
+  "GTI_KILO_DISABLE_BUILTIN_MODELS=off: enabled_providers config still restricts",
   Effect.gen(function* () {
     yield* setProcessEnv("GTI_KILO_DISABLE_BUILTIN_MODELS", "off")
     yield* setProcessEnv("ANTHROPIC_API_KEY", "test-api-key")
