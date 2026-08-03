@@ -6,6 +6,9 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { GlobalBus } from "@/bus/global"
 
 export async function upgrade() {
+  // kilocode_change start - GTI: suppress auto-update by default; set GTI_KILO_DISABLE_AUTOUPDATE=off to restore upstream
+  if (process.env.GTI_KILO_DISABLE_AUTOUPDATE !== "off") return
+  // kilocode_change end
   const config = await AppRuntime.runPromise(Config.Service.use((cfg) => cfg.getGlobal()))
   if (config.autoupdate === false || Flag.KILO_DISABLE_AUTOUPDATE) return
   const method = await Installation.method()
