@@ -9,6 +9,11 @@ export const telemetryHandlers = HttpApiBuilder.group(InstanceHttpApi, "telemetr
     const capture = Effect.fn("TelemetryHttpApi.capture")(function* (ctx: {
       payload: typeof TelemetryCapturePayload.Type
     }) {
+      // kilocode_change start - GTI: defense-in-depth — refuse events when telemetry hard-disabled
+      if (process.env.GTI_KILO_DISABLE_TELEMETRY !== "off" && !Telemetry.isEnabled()) {
+        return true
+      }
+      // kilocode_change end
       // fire-and-forget: log instead of swallowing
       yield* Effect.sync(() =>
         Telemetry.track(ctx.payload.event as any, ctx.payload.properties as Record<string, unknown> | undefined),
@@ -19,6 +24,11 @@ export const telemetryHandlers = HttpApiBuilder.group(InstanceHttpApi, "telemetr
     const setEnabled = Effect.fn("TelemetryHttpApi.setEnabled")(function* (ctx: {
       payload: typeof TelemetrySetEnabledPayload.Type
     }) {
+      // kilocode_change start - GTI: never re-enable when telemetry hard-disabled
+      if (process.env.GTI_KILO_DISABLE_TELEMETRY !== "off" && !Telemetry.isEnabled()) {
+        return true
+      }
+      // kilocode_change end
       yield* Effect.sync(() => Telemetry.setEnabled(ctx.payload.enabled))
       return true
     })

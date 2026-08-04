@@ -82,4 +82,22 @@ export namespace Client {
       }
     }
   }
+
+  // kilocode_change start - toggle: GTI_KILO_DISABLE_TELEMETRY=off restores upstream
+  // Gratex default (unset): telemetry hard-disabled — no PostHog client created, cannot re-enable.
+  // Set GTI_KILO_DISABLE_TELEMETRY=off to restore upstream PostHog behaviour.
+  if (process.env.GTI_KILO_DISABLE_TELEMETRY !== "off") {
+    Object.assign(Client, {
+      // Gratex default: skip PostHog client creation entirely.
+      init: () => {
+        enabled = false
+        client = null
+      },
+      // Gratex default: force-enabled to false regardless of KILO_TELEMETRY_LEVEL or config.
+      setEnabled: (_value: boolean) => {
+        enabled = false
+      },
+    })
+  }
+  // kilocode_change end
 }

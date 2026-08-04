@@ -27,13 +27,18 @@ mock.module("posthog-node", () => ({
 let flushCalls = 0
 const shutdownCalls: Array<number | undefined> = []
 
+// Skip when GTI_KILO_DISABLE_TELEMETRY is active — the toggle redefines Client.init()
+// to a no-op (client = null), so there's no PostHog client to shut down.
+const toggleActive = process.env.GTI_KILO_DISABLE_TELEMETRY !== "off"
+const whenToggleInactive = test.skipIf(toggleActive)
+
 describe("Telemetry.shutdown timeout (#9788)", () => {
   beforeEach(() => {
     flushCalls = 0
     shutdownCalls.length = 0
   })
 
-  test("passes timeoutMs through to PostHog.shutdown and skips unbounded explicit flush()", async () => {
+  whenToggleInactive("passes timeoutMs through to PostHog.shutdown and skips unbounded explicit flush()", async () => {
     // Reproduces the CLI exit hang reported in #9788: when the PostHog endpoint
     // is unreachable (offline, firewall, DNS adblock resolving the host to
     // 0.0.0.0), an explicit flush() call before shutdown retries 3x with 3s
