@@ -4,6 +4,7 @@ import * as NodePath from "@effect/platform-node/NodePath"
 import { prepareCommand as prepareSandbox } from "@kilocode/sandbox" // kilocode_change
 import { tap as tapStdio, tapped } from "./kilocode/stdio-tap" // kilocode_change - Bun drops buffered stdio on close
 import * as SpawnValidation from "./kilocode/spawn-validation" // kilocode_change
+import { settle } from "./kilocode/exit-code" // kilocode_change - settle signal termination as 128 + signum
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -235,7 +236,9 @@ export const make = Effect.gen(function* () {
           evaluate: () => proc.stdin!,
           onError: (err) => toPlatformError("fromWritable(stdin)", toError(err), command),
           endOnDone: cfg.endOnDone,
-          encoding: cfg.encoding,
+          // kilocode_change - effect's `Encoding` allows "utf-16le"; node's `BufferEncoding`
+          // only accepts "utf16le". Runtime `write()` casts to any, so a type cast suffices.
+          encoding: cfg.encoding as NodeJS.BufferEncoding,
         })
       }
       if (Stream.isStream(cfg.stream)) return Effect.as(Effect.forkScoped(Stream.run(cfg.stream, sink)), sink)
@@ -441,16 +444,7 @@ export const make = Effect.gen(function* () {
             getInputFd: fd.getInputFd,
             getOutputFd: fd.getOutputFd,
             isRunning: Effect.map(Deferred.isDone(signal), (done) => !done),
-            exitCode: Effect.flatMap(Deferred.await(signal), ([code, signal]) => {
-              if (Predicate.isNotNull(code)) return Effect.succeed(ExitCode(code))
-              return Effect.fail(
-                toPlatformError(
-                  "exitCode",
-                  new Error(`Process interrupted due to receipt of signal: '${signal}'`),
-                  command,
-                ),
-              )
-            }),
+            exitCode: Effect.flatMap(Deferred.await(signal), settle), // kilocode_change - signal termination settles as 128 + signum
             kill: (opts?: ChildProcess.KillOptions) => {
               const sig = opts?.killSignal ?? "SIGTERM"
               const send = (s: NodeJS.Signals) =>

@@ -91,7 +91,7 @@ describe("GTI_KILO_DISABLE_BUILTIN_MODELS", () => {
       const previous = process.env.GTI_KILO_DISABLE_BUILTIN_MODELS
       try {
         process.env.GTI_KILO_DISABLE_BUILTIN_MODELS = "off"
-        const state = yield* Ref.make({ body: JSON.stringify(fixture), status: 200, calls: [] })
+        const state = yield* Ref.make<MockState>({ body: JSON.stringify(fixture), status: 200, calls: [] })
         const result = yield* provided(
           state,
           ModelsDev.Service.use((s) => s.get()),
@@ -111,7 +111,7 @@ describe("GTI_KILO_DISABLE_BUILTIN_MODELS", () => {
       const previous = process.env.GTI_KILO_DISABLE_BUILTIN_MODELS
       try {
         delete process.env.GTI_KILO_DISABLE_BUILTIN_MODELS // unset = ON by default (opt-out)
-        const state = yield* Ref.make({ body: JSON.stringify(fixture), status: 200, calls: [] })
+        const state = yield* Ref.make<MockState>({ body: JSON.stringify(fixture), status: 200, calls: [] })
         const result = yield* provided(
           state,
           ModelsDev.Service.use((s) => s.get()),
@@ -131,7 +131,7 @@ describe("GTI_KILO_DISABLE_BUILTIN_MODELS", () => {
       const previous = process.env.GTI_KILO_DISABLE_BUILTIN_MODELS
       try {
         process.env.GTI_KILO_DISABLE_BUILTIN_MODELS = "1"
-        const state = yield* Ref.make({ body: JSON.stringify(fixture), status: 200, calls: [] })
+        const state = yield* Ref.make<MockState>({ body: JSON.stringify(fixture), status: 200, calls: [] })
         const result = yield* provided(
           state,
           ModelsDev.Service.use((s) => s.get()),

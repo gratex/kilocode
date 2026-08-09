@@ -137,6 +137,8 @@ import type {
   GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
+  IndexingConsentErrors,
+  IndexingConsentResponses,
   IndexingModelsErrors,
   IndexingModelsResponses,
   IndexingStatusErrors,
@@ -209,6 +211,8 @@ import type {
   KiloFimResponses,
   KiloModelsImagesErrors,
   KiloModelsImagesResponses,
+  KiloModelsTranscriptionsErrors,
+  KiloModelsTranscriptionsResponses,
   KiloModesErrors,
   KiloModesResponses,
   KiloNotificationsErrors,
@@ -1762,6 +1766,10 @@ export class Config2 extends HeyApiClient {
         [key: string]: unknown
       }
       unset?: Array<Array<string>>
+      expected?: {
+        path: string
+        revision: string
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -1775,6 +1783,7 @@ export class Config2 extends HeyApiClient {
             { in: "body", key: "scope" },
             { in: "body", key: "set" },
             { in: "body", key: "unset" },
+            { in: "body", key: "expected" },
           ],
         },
       ],
@@ -3752,6 +3761,7 @@ export class Permission extends HeyApiClient {
       workspace?: string
       reply?: "once" | "always" | "reject"
       message?: string
+      interactive?: boolean
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3765,6 +3775,7 @@ export class Permission extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "reply" },
             { in: "body", key: "message" },
+            { in: "body", key: "interactive" },
           ],
         },
       ],
@@ -6529,6 +6540,43 @@ export class Indexing extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Set indexing consent
+   *
+   * Set machine-local code indexing consent for the active project.
+   */
+  public consent<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<IndexingConsentResponses, IndexingConsentErrors, ThrowOnError>({
+      url: "/indexing/consent",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
 }
 
 export class InteractiveTerminal extends HeyApiClient {
@@ -6805,6 +6853,40 @@ export class Models extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<KiloModelsImagesResponses, KiloModelsImagesErrors, ThrowOnError>({
       url: "/kilo/models/images",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Speech-to-text models
+   *
+   * List transcription-capable models from the Kilo Gateway catalog
+   */
+  public transcriptions<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      KiloModelsTranscriptionsResponses,
+      KiloModelsTranscriptionsErrors,
+      ThrowOnError
+    >({
+      url: "/kilo/models/transcriptions",
       ...options,
       ...params,
     })
@@ -10471,6 +10553,7 @@ export class Pty2 extends HeyApiClient {
       "location[workspace]"?: string
       cursor?: string
       ticket?: string
+      replayExited?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -10484,6 +10567,7 @@ export class Pty2 extends HeyApiClient {
             { in: "query", key: "location[workspace]" },
             { in: "query", key: "cursor" },
             { in: "query", key: "ticket" },
+            { in: "query", key: "replayExited" },
           ],
         },
       ],
