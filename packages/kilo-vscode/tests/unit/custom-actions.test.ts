@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test"
 import * as vscode from "vscode"
-import { registerCustomActions } from "../../src/services/code-actions/custom-actions"
+import { registerCustomActions, fill } from "../../src/services/code-actions/custom-actions"
 
 type Command = (...args: unknown[]) => unknown
 
@@ -122,5 +122,44 @@ describe("registerCustomActions", () => {
     // and the flow path exists. The actual postMessage content is tested via
     // the fill() logic in support-prompt.test.ts pattern.
     expect(state.commands.has("kilo-code.new.customActions.run")).toBe(true)
+  })
+})
+
+describe("fill", () => {
+  const params = {
+    filePath: "scripts/run.sh",
+    startLine: "1",
+    endLine: "5",
+    selectedText: "echo hi",
+    userInput: "",
+  }
+
+  it("substitutes known file path and line range variables", () => {
+    const result = fill("refactor ${filePath}:${startLine}-${endLine}", params)
+    expect(result).toBe("refactor scripts/run.sh:1-5")
+  })
+
+  it("substitutes selectedText", () => {
+    const result = fill("```\n${selectedText}\n```", params)
+    expect(result).toBe("```\necho hi\n```")
+  })
+
+  it("renders diagnosticText from the diagnostics array", () => {
+    const result = fill("${diagnosticText}", {
+      ...params,
+      diagnostics: [{ source: "ts", message: "boom", code: 1 }],
+    })
+    expect(result).toContain("Current problems detected")
+    expect(result).toContain("[ts] boom (1)")
+  })
+
+  it("preserves unknown bash variables literally", () => {
+    const result = fill('if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then', params)
+    expect(result).toBe('if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then')
+  })
+
+  it("preserves any unknown placeholder verbatim", () => {
+    const result = fill('echo "${FOO}"', params)
+    expect(result).toBe('echo "${FOO}"')
   })
 })

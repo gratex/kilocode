@@ -8,19 +8,23 @@ import { CustomCodeActionProvider } from "./custom-code-action-provider"
 
 type Params = Record<string, string | any[]>
 
-/** Standalone fill() — mirrors support-prompt.ts:fill() without importing it */
-function fill(template: string, params: Params): string {
-  return template.replace(/\${(.*?)}/g, (_, key) => {
-    if (key === "diagnosticText") {
+/** Standalone fill() — mirrors support-prompt.ts:fill() without importing it.
+ *  Substitutes only the known static template variables and leaves any other
+ *  ${...} (e.g. bash variables) untouched, verbatim. */
+export function fill(template: string, params: Params): string {
+  return template
+    .replace(/\$\{diagnosticText\}/g, () => {
       const d = params["diagnostics"] as vscode.Diagnostic[] | undefined
       if (!d?.length) return ""
       return `\nCurrent problems detected:\n${d
         .map((x) => `- [${x.source || "Error"}] ${x.message}${x.code ? ` (${x.code})` : ""}`)
         .join("\n")}`
-    }
-    if (key in params) return String(params[key] ?? "")
-    return ""
-  })
+    })
+    .replace(/\$\{filePath\}/g, () => String(params["filePath"] ?? ""))
+    .replace(/\$\{startLine\}/g, () => String(params["startLine"] ?? ""))
+    .replace(/\$\{endLine\}/g, () => String(params["endLine"] ?? ""))
+    .replace(/\$\{selectedText\}/g, () => String(params["selectedText"] ?? ""))
+    .replace(/\$\{userInput\}/g, () => String(params["userInput"] ?? ""))
 }
 
 export function registerCustomActions(
