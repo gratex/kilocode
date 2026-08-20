@@ -103,6 +103,8 @@ export interface EditorContext {
   openTabs?: string[]
   /** Workspace-relative path of the active editor file */
   activeFile?: string
-  /** User's default shell (from vscode.env.shell) */
+   /** User's default shell (from vscode.env.shell) */
   shell?: string
+  /** Multi-root workspace folder entries ("name: path") when >1 folder exists */
+  workspaceFolders?: string[]
 }

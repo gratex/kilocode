@@ -4730,20 +4730,30 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Shell
     const shell = vscode.env.shell || undefined
 
-    // Gratex toggle: strip visibleFiles, openTabs, activeFile from LLM context by default.
-    // Set GTI_KILO_STRIP_EDITOR_CONTEXT=off to restore upstream behaviour.
-    if (process.env.GTI_KILO_STRIP_EDITOR_CONTEXT !== "off") {
-      return {
-        ...(shell ? { shell } : {}),
-      }
-    }
-
-    return {
+    // original kilo retval
+    const ret: EditorContext = {
       ...(visibleFiles.length > 0 ? { visibleFiles } : {}),
       ...(openTabs.length > 0 ? { openTabs } : {}),
       ...(activeFile ? { activeFile } : {}),
       ...(shell ? { shell } : {}),
     }
+
+    if (process.env.GTI_KILO_STRIP_EDITOR_CONTEXT !== "off") {
+      delete ret.visibleFiles;
+      delete ret.openTabs;
+      delete ret.activeFile;
+    }
+
+    if (process.env.GTI_KILO_WORKSPACE_FOLDERS_CONTEXT !== "off") {
+      const workspaceFolders = vscode.workspace.workspaceFolders
+        ?.filter((_, _i, arr) => arr.length > 1)
+        .map((f) => `${f.name}: ${f.uri.fsPath}`)
+      if (workspaceFolders?.length) {
+        ret.workspaceFolders = workspaceFolders
+      }
+    }
+
+    return ret;
   }
 
   private getWorkspaceDirectory(sessionId?: string): string {

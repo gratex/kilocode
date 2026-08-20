@@ -7,6 +7,7 @@ export const EditorContext = Schema.Struct({
   openTabs: Schema.optional(Schema.Array(Schema.String)),
   activeFile: Schema.optional(Schema.String),
   shell: Schema.optional(Schema.String),
+  workspaceFolders: Schema.optional(Schema.Array(Schema.String)),
 })
 export type EditorContext = Types.DeepMutable<Schema.Schema.Type<typeof EditorContext>>
 
@@ -48,6 +49,12 @@ export function environmentDetails(ctx?: EditorContext): string {
   }
   if (ctx?.worktree) {
     lines.push(`Workspace root folder: ${ctx.worktree}`)
+  }
+  if (ctx?.workspaceFolders?.length) {
+    lines.push(`Workspace folders:`)
+    for (const f of ctx.workspaceFolders) {
+      lines.push(`  ${f}`)
+    }
   }
   if (ctx?.activeFile) {
     lines.push(`Active file: ${ctx.activeFile}`)
