@@ -9,7 +9,7 @@ import { Config } from "@/config/config"
 import { ConfigAgentV1 } from "@opencode-ai/core/v1/config/agent"
 import { ConfigCommandV1 } from "@opencode-ai/core/v1/config/command"
 import { ConfigErrorV1, FrontmatterError } from "@opencode-ai/core/v1/config/error"
-import { Instance } from "@/kilocode/instance"
+import { Instance, capture } from "@/kilocode/instance"
 import { Filesystem } from "@/util/filesystem"
 
 export namespace ConfigValidation {
@@ -74,17 +74,21 @@ export namespace ConfigValidation {
     let md: Awaited<ReturnType<typeof ConfigMarkdown.parse>>
     try {
       const trusted = path.isAbsolute(filepath) && ConfigProtection.isAbsolute(filepath)
-      const ctx = Instance.current
-      const root = ctx.worktree === "/" ? ctx.directory : ctx.worktree
+      // kilocode_change start - GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG=off re-enables the upstream trust block;
+      // otherwise (Gratex default) all config is trusted and capture() avoids the NotFound false positive.
+      const blockActive = process.env.GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG === "off"
+      const ctx = capture()
+      const root = ctx ? (ctx.worktree === "/" ? ctx.directory : ctx.worktree) : path.dirname(filepath)
       md = await ConfigMarkdown.parse(filepath, {
-        trusted,
-        fileScope: trusted ? undefined : { root, source: filepath },
+        trusted: trusted || !blockActive,
+        fileScope: !blockActive ? undefined : { root, source: filepath },
       })
+      // kilocode_change end
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (e: any) {
       const msg = FrontmatterError.isInstance(e)
-        ? e.data.message
-        : `Failed to parse frontmatter: ${e instanceof Error ? e.message : String(e)}`
+        ? `Failed to parse frontmatter: ${e.data.message}`
+        : `Config validation error: ${e instanceof Error ? e.message : String(e)}`
       return `\n\n<config_validation>\nERROR: ${label(filepath)}\n  ${msg}\n</config_validation>`
     }
 
