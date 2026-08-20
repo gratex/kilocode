@@ -10,7 +10,10 @@ type Params = Record<string, string | any[]>
 
 /** Standalone fill() — mirrors support-prompt.ts:fill() without importing it.
  *  Substitutes only the known static template variables and leaves any other
- *  ${...} (e.g. bash variables) untouched, verbatim. */
+ *  ${...} (e.g. bash variables) untouched, verbatim.
+ *
+ *  Known variables: ${diagnosticText}, ${filePath}, ${absoluteFilePath},
+ *  ${startLine}, ${endLine}, ${selectedText}, ${userInput}. */
 export function fill(template: string, params: Params): string {
   return template
     .replace(/\$\{diagnosticText\}/g, () => {
@@ -21,6 +24,7 @@ export function fill(template: string, params: Params): string {
         .join("\n")}`
     })
     .replace(/\$\{filePath\}/g, () => String(params["filePath"] ?? ""))
+    .replace(/\$\{absoluteFilePath\}/g, () => String(params["absoluteFilePath"] ?? ""))
     .replace(/\$\{startLine\}/g, () => String(params["startLine"] ?? ""))
     .replace(/\$\{endLine\}/g, () => String(params["endLine"] ?? ""))
     .replace(/\$\{selectedText\}/g, () => String(params["selectedText"] ?? ""))
@@ -58,6 +62,7 @@ export function registerCustomActions(
       if (!ctx) return
       const prompt = fill(action.prompt, {
         filePath: ctx.filePath,
+        absoluteFilePath: vscode.window.activeTextEditor?.document.uri.fsPath ?? "",
         startLine: String(ctx.startLine),
         endLine: String(ctx.endLine),
         selectedText: ctx.selectedText,

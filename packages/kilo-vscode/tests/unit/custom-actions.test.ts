@@ -162,4 +162,25 @@ describe("fill", () => {
     const result = fill('echo "${FOO}"', params)
     expect(result).toBe('echo "${FOO}"')
   })
+
+  it("substitutes absoluteFilePath when provided", () => {
+    const result = fill("Refactor ${absoluteFilePath}:${startLine}-${endLine}", {
+      ...params,
+      absoluteFilePath: "/home/user/proj/src/main.ts",
+    })
+    expect(result).toBe("Refactor /home/user/proj/src/main.ts:1-5")
+  })
+
+  it("renders empty string when absoluteFilePath is absent from params", () => {
+    const result = fill("Path: ${absoluteFilePath}", params)
+    expect(result).toBe("Path: ")
+  })
+
+  it("preserves absoluteFilePath alongside unknown bash variables", () => {
+    const result = fill(
+      'Edit ${absoluteFilePath} and run "${BASH_SOURCE[0]}"',
+      { ...params, absoluteFilePath: "/proj/src/run.sh" },
+    )
+    expect(result).toBe('Edit /proj/src/run.sh and run "${BASH_SOURCE[0]}"')
+  })
 })
