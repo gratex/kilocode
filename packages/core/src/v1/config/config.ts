@@ -181,10 +181,6 @@ export const Info = Schema.Struct({
     description:
       "Default agent to use when none is specified. Must be a primary agent. Falls back to 'code' if not set or if the specified agent is invalid.",
   }),
-  system_soul: Schema.optional(Schema.NullOr(Schema.String)).annotate({
-    description:
-      "Override the built-in soul identity prompt. If set, replaces the default personality/behavior prompt injected at the start of every system prompt.",
-  }), // kilocode_change
   // kilocode_change end
   subagent_depth: Schema.optional(NonNegativeInt).annotate({
     description: "Maximum subagent nesting depth. Defaults to 1, which prevents subagents from launching subagents.",
