@@ -362,8 +362,12 @@ const layer = Layer.effect(
       const text = yield* readConfigFile(filepath)
       if (!text) return {} as Info
       // kilocode_change start - remove variable-bearing project MCP headers before generic substitution can read them
+      // GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG=off re-enables the block; otherwise (Gratex default) preserve
+      // {env:}/{file:} in project MCP headers so they resolve like upstream opencode.
       const sanitized =
-        trusted === false ? sanitizeProjectMcpHeaders(ConfigParse.jsonc(text, filepath), filepath) : undefined
+        trusted === false && process.env.GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG === "off"
+          ? sanitizeProjectMcpHeaders(ConfigParse.jsonc(text, filepath), filepath)
+          : undefined
       const content = sanitized ? (JSON.stringify(sanitized.config) ?? text) : text
       if (sanitized && configWarnings) configWarnings.push(...sanitized.warnings)
       const data = yield* loadConfig(

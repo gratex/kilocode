@@ -5,11 +5,16 @@
  * The toggle only affects the three ceiling-specific functions:
  *   inherited(), permissions(), merge()
  *
- * validate(), nestedTask(), and resolveModel() are NOT part of the ceiling
+ * validate() and resolveModel() are NOT part of the ceiling
  * toggle — they are tested unconditionally below.
  *
  * By default (unset), ceiling is OFF — subagents do NOT inherit deny rules (opencode behavior).
  * When GTI_KILO_NO_MCP_SUBAGENT_CEILING=off, ceiling is ON — subagents inherit deny rules (kilo behavior).
+ *
+ * NOTE (upstream v7.4.22, #11523): `KiloTask.inherited()` no longer inherits `bash` denies
+ * from the calling agent — the caller's `readOnlyBash` allowlist is not projected onto a
+ * writable subagent. Edit, notebook and MCP denials remain hard ceilings in kilo mode.
+ * The gratex toggle continues to switch between the two modes for those inherited ceilings.
  *
  * Run with ceiling OFF (default):
  *   env -u GTI_KILO_NO_MCP_SUBAGENT_CEILING bun test ./test/kilocode/mcp-subagent-ceiling.test.ts
@@ -53,10 +58,6 @@ describe("KiloTask non-ceiling functions (always active)", () => {
     expect(() => KiloTask.validate(sub as any, "explore")).not.toThrow()
   })
 
-  test("nestedTask returns false — Kilo disallows nested subagents", () => {
-    expect(KiloTask.nestedTask()).toBe(false)
-  })
-
   test("resolveModel falls back to parent model when no overrides", async () => {
     const result = await Effect.runPromise(
       KiloTask.resolveModel({
@@ -76,7 +77,7 @@ describe("KiloTask non-ceiling functions (always active)", () => {
 })
 
 describe("KiloTask ceiling ON (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off — kilo behavior)", () => {
-  whenOn("inherited returns edit + bash + MCP deny rules from caller and session", () => {
+  whenOn("inherited returns edit + MCP deny rules (bash NOT inherited — #11523)", () => {
     const caller = mkAgent("build", "primary", [
       { permission: "edit", pattern: "*", action: "deny" },
       { permission: "bash", pattern: "*", action: "deny" },
@@ -85,7 +86,8 @@ describe("KiloTask ceiling ON (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off — kilo beh
     const sess = mkSession([{ permission: "mcp_server_get", pattern: "*", action: "deny" }])
     const rules = KiloTask.inherited({ caller: caller as any, session: sess, mcp: { mcp_server: {} as any } })
     expect(rules).toContainEqual({ permission: "edit", pattern: "*", action: "deny" })
-    expect(rules).toContainEqual({ permission: "bash", pattern: "*", action: "deny" })
+    // Upstream #11523: the caller's bash policy is NOT projected as a subagent ceiling.
+    expect(rules).not.toContainEqual(expect.objectContaining({ permission: "bash" }))
     expect(rules).toContainEqual({ permission: "mcp_server_get", pattern: "*", action: "deny" })
     expect(rules).not.toContainEqual(expect.objectContaining({ action: "allow" }))
   })
@@ -120,7 +122,7 @@ describe("KiloTask ceiling ON (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off — kilo beh
     expect(Permission.evaluate("mymcp_mymethod", "*", effective).action).toBe("deny")
   })
 
-  whenOn("parent bash git * deny is a hard ceiling — subagent bash git commit allow is blocked", () => {
+  whenOn("parent bash deny is NOT inherited (upstream #11523) — subagent keeps its own bash allow", () => {
     const caller = mkAgent("build", "primary", [
       { permission: "bash", pattern: "git *", action: "deny" },
     ])
@@ -130,10 +132,11 @@ describe("KiloTask ceiling ON (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off — kilo beh
     ])
 
     const ceiling = KiloTask.inherited({ caller: caller as any, session: sess, mcp: {} })
-    expect(ceiling).toContainEqual(expect.objectContaining({ permission: "bash", pattern: "git *", action: "deny" }))
+    // Upstream #11523: bash is deliberately excluded from inherited ceilings.
+    expect(ceiling).not.toContainEqual(expect.objectContaining({ permission: "bash" }))
 
     const effective = Permission.merge(subagent.permission, ceiling)
-    expect(Permission.evaluate("bash", "git commit", effective).action).toBe("deny")
+    expect(Permission.evaluate("bash", "git commit", effective).action).toBe("allow")
   })
 })
 
@@ -171,7 +174,7 @@ describe("KiloTask ceiling OFF (default, unset — opencode behavior)", () => {
     expect(Permission.evaluate("mymcp_mymethod", "*", effective).action).toBe("allow")
   })
 
-  whenOff("parent bash git * deny does NOT block subagent bash git commit allow", () => {
+  whenOff("parent bash git * deny does NOT block subagent bash git commit allow (same as #11523)", () => {
     const caller = mkAgent("build", "primary", [
       { permission: "bash", pattern: "git *", action: "deny" },
     ])

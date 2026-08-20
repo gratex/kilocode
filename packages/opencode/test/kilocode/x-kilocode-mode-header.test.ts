@@ -14,6 +14,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect } from "bun:test"
 import path from "path"
 import { Effect, Layer, Stream } from "effect"
+import { AppNodeBuilder } from "@opencode-ai/core/effect/app-node-builder"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { LLM } from "../../src/session/llm"
 import { Provider } from "../../src/provider/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -28,7 +30,7 @@ import { ModelsDev } from "@opencode-ai/core/models-dev"
 const headerDisabled = process.env.GTI_KILO_X_KILOCODE_MODE_HEADER === "off"
 
 // --- test layer ---
-const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer))
+const it = testEffect(AppNodeBuilder.build(LayerNode.group([LLM.node, Provider.node])))
 
 // skipIf helpers bound to it.instance
 const whenAll = headerDisabled ? it.instance.skip : it.instance

@@ -9,6 +9,7 @@
 
 import { afterEach, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { disposeAllInstances } from "../fixture/fixture"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
@@ -45,7 +46,7 @@ afterEach(async () => {
 
 const list = Provider.use.list()
 
-const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer))
+const it = testEffect(LayerNode.compile(LayerNode.group([Provider.node, Env.node, Plugin.node])))
 
 // --- GTI_KILO_DISABLE_BUILTIN_MODELS unset ---
 

@@ -248,6 +248,8 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
           }),
       // kilocode_change start - headers for kilo provider
       ...(isKilo && input.agent.name ? { "x-kilocode-mode": input.agent.name.toLowerCase() } : {}),
+      // kilocode_change - send x-kilocode-mode to all providers by default; GTI_KILO_X_KILOCODE_MODE_HEADER=off restricts to Kilo Gateway only
+      ...(!isKilo && process.env.GTI_KILO_X_KILOCODE_MODE_HEADER !== "off" && input.agent.name ? { "x-kilocode-mode": input.agent.name.toLowerCase() } : {}),
       ...(isKilo && kiloProjectId ? { [HEADER_PROJECTID]: kiloProjectId } : {}),
       ...(isKilo && machineId ? { [HEADER_MACHINEID]: machineId } : {}),
       ...(isKilo ? { [HEADER_TASKID]: input.sessionID } : {}),
