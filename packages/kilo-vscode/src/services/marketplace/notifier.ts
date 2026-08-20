@@ -121,3 +121,16 @@ export class MarketplaceNotifier implements vscode.Disposable {
     if (choice?.action === "dismiss") await this.dismiss(slug)
   }
 }
+
+// kilocode_change start - toggle: GTI_KILO_DISABLE_MARKETPLACE_NOTIFIER=off restores upstream
+// Gratex default (unset): marketplace suggestion notifier disabled — constructor still
+// subscribes to workspace events, but start() and schedule() are no-ops, so no background
+// scan runs and no toast ever appears. The marketplace panel remains fully functional.
+// Set GTI_KILO_DISABLE_MARKETPLACE_NOTIFIER=off to restore upstream behaviour.
+if (process.env.GTI_KILO_DISABLE_MARKETPLACE_NOTIFIER !== "off") {
+  const proto = MarketplaceNotifier.prototype as unknown as Record<string, (...args: never[]) => void>
+  proto.start = () => undefined
+  proto.schedule = () => undefined
+}
+// kilocode_change end
+// Generated/modified by AI Kilo Code 7.4.22-gratex-013, used model gti-litellm/laguna-s-2.1
