@@ -1,7 +1,18 @@
 // Generated/modified by AI Kilo Code 7.4.17-002-gratex, used model gti-litellm/ornith-1.0
+// Modified by AI Kilo Code 7.4.22-gratex-015, used model gti-litellm/deepseek-v4-flash — subfolder support for .kilo/actions/
 import * as vscode from "vscode"
 import * as path from "path"
 import { parse as parseYaml } from "yaml"
+
+/** Derive the action ID from the action file's path relative to .kilo/actions/.
+ *  Top-level "refactor.yaml" → "refactor"; nested "sub/refactor.yaml" → "sub-refactor".
+ *  Backward compatible: same rules as the previous basename-only derivation. */
+export function deriveId(relPath: string): string {
+  return relPath
+    .replace(/\.(yaml|yml)$/i, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, "-")
+}
 
 export interface CustomActionDefinition {
   id: string
@@ -14,12 +25,12 @@ export interface CustomActionDefinition {
 }
 
 const KIND_MAP: Record<string, vscode.CodeActionKind> = {
-  "quickfix":         vscode.CodeActionKind.QuickFix,
-  "refactor":         vscode.CodeActionKind.Refactor,
+  quickfix: vscode.CodeActionKind.QuickFix,
+  refactor: vscode.CodeActionKind.Refactor,
   "refactor.extract": vscode.CodeActionKind.RefactorExtract,
-  "refactor.inline":  vscode.CodeActionKind.RefactorInline,
+  "refactor.inline": vscode.CodeActionKind.RefactorInline,
   "refactor.rewrite": vscode.CodeActionKind.RefactorRewrite,
-  "source":           vscode.CodeActionKind.Source,
+  source: vscode.CodeActionKind.Source,
 }
 
 export class CustomActionStore implements vscode.Disposable {
@@ -27,7 +38,9 @@ export class CustomActionStore implements vscode.Disposable {
   readonly onDidChange = this._onDidChange.event
 
   private _actions: CustomActionDefinition[] = []
-  get actions(): readonly CustomActionDefinition[] { return this._actions }
+  get actions(): readonly CustomActionDefinition[] {
+    return this._actions
+  }
 
   private readonly watchers: vscode.Disposable[] = []
 
@@ -44,31 +57,43 @@ export class CustomActionStore implements vscode.Disposable {
 
     for (const folder of this.workspaceFolders) {
       const dir = vscode.Uri.file(path.join(folder.uri.fsPath, ".kilo", "actions"))
+      const files = await this.findYamlFiles(dir)
 
-      let entries: [string, vscode.FileType][]
-      try {
-        entries = await vscode.workspace.fs.readDirectory(dir)
-      } catch {
-        continue // .kilo/actions/ doesn't exist in this folder — skip silently
-      }
-
-      for (const [name, type] of entries) {
-        if (type !== vscode.FileType.File) continue
-        if (!/\.(yaml|yml)$/i.test(name)) continue
-
-        const id = path.basename(name, path.extname(name)).toLowerCase().replace(/[^a-z0-9-]/g, "-")
+      for (const uri of files) {
+        const relPath = path.relative(dir.fsPath, uri.fsPath)
+        const id = deriveId(relPath)
         if (seen.has(id)) {
-          console.warn(`[Custom Actions] Duplicate action ID "${id}" (${name} in ${folder.name}) — skipping`)
+          console.warn(`[Custom Actions] Duplicate action ID "${id}" (${relPath} in ${folder.name}) — skipping`)
           continue
         }
         seen.add(id)
 
-        const def = await this.loadFile(vscode.Uri.joinPath(dir, name), id)
+        const def = await this.loadFile(uri, id)
         if (def) results.push(def)
       }
     }
 
     return results.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+  }
+
+  /** Recursively collect *.yaml/*.yml files under dir (including subfolders). */
+  private async findYamlFiles(dir: vscode.Uri): Promise<vscode.Uri[]> {
+    let entries: [string, vscode.FileType][]
+    try {
+      entries = await vscode.workspace.fs.readDirectory(dir)
+    } catch {
+      return [] // .kilo/actions/ doesn't exist — skip silently
+    }
+
+    const files: vscode.Uri[] = []
+    for (const [name, type] of entries) {
+      if (type === vscode.FileType.Directory) {
+        files.push(...(await this.findYamlFiles(vscode.Uri.joinPath(dir, name))))
+      } else if (type === vscode.FileType.File && /\.(yaml|yml)$/i.test(name)) {
+        files.push(vscode.Uri.joinPath(dir, name))
+      }
+    }
+    return files
   }
 
   private async loadFile(uri: vscode.Uri, id: string): Promise<CustomActionDefinition | undefined> {
@@ -118,11 +143,11 @@ export class CustomActionStore implements vscode.Disposable {
     return {
       id,
       name: obj.name.trim(),
-      order:           typeof obj.order === "number" ? Math.floor(obj.order) : 100,
-      prompt:          obj.prompt,
+      order: typeof obj.order === "number" ? Math.floor(obj.order) : 100,
+      prompt: obj.prompt,
       showInLightbulb: obj.showInLightbulb === true,
-      codeActionKind:  KIND_MAP[String(obj.codeActionKind ?? "")] ?? vscode.CodeActionKind.Refactor,
-      target:          obj.target === "context" ? "context" : "task",
+      codeActionKind: KIND_MAP[String(obj.codeActionKind ?? "")] ?? vscode.CodeActionKind.Refactor,
+      target: obj.target === "context" ? "context" : "task",
     }
   }
 
@@ -132,9 +157,7 @@ export class CustomActionStore implements vscode.Disposable {
 
     for (const folder of this.workspaceFolders) {
       const dir = path.join(folder.uri.fsPath, ".kilo", "actions")
-      const watcher = vscode.workspace.createFileSystemWatcher(
-        new vscode.RelativePattern(dir, "**/*.{yaml,yml}"),
-      )
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(dir, "**/*.{yaml,yml}"))
       const reload = async () => {
         this._actions = await this.loadAll()
         this._onDidChange.fire(this._actions)

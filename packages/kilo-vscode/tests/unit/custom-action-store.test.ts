@@ -1,14 +1,40 @@
 import { describe, it, expect } from "bun:test"
-import { CustomActionStore } from "../../src/services/code-actions/custom-action-store"
+import { CustomActionStore, deriveId } from "../../src/services/code-actions/custom-action-store"
 
 // Access private validate() via a test-only subclass
 class TestableStore extends CustomActionStore {
   testValidate(raw: unknown, id: string, filePath: string) {
-    return (this as unknown as { validate: (raw: unknown, id: string, filePath: string) => unknown }).validate(raw, id, filePath)
+    return (this as unknown as { validate: (raw: unknown, id: string, filePath: string) => unknown }).validate(
+      raw,
+      id,
+      filePath,
+    )
   }
 }
 
 const store = new TestableStore([])
+
+describe("CustomActionStore.deriveId()", () => {
+  it("derives id from top-level yaml filename", () => {
+    expect(deriveId("refactor.yaml")).toBe("refactor")
+    expect(deriveId("generate-tests.yml")).toBe("generate-tests")
+  })
+
+  it("flattens subfolder path separators into the id slug", () => {
+    expect(deriveId("sub/refactor.yaml")).toBe("sub-refactor")
+    expect(deriveId("deep/nested/my action.yaml")).toBe("deep-nested-my-action")
+  })
+
+  it("lowercases and slugifies non-alphanumeric characters", () => {
+    expect(deriveId("My Action.yaml")).toBe("my-action")
+    expect(deriveId("SQL Query.yml")).toBe("sql-query")
+  })
+
+  it("is backward compatible with basename-only ids", () => {
+    expect(deriveId("fix-with-context.yaml")).toBe("fix-with-context")
+    expect(deriveId("add-to-chat.yaml")).toBe("add-to-chat")
+  })
+})
 
 describe("CustomActionStore.validate()", () => {
   describe("valid action", () => {
@@ -47,11 +73,7 @@ describe("CustomActionStore.validate()", () => {
     })
 
     it("trims whitespace from name", () => {
-      const result = store.testValidate(
-        { name: "  Spaced  ", prompt: "prompt" },
-        "spaced",
-        "spaced.yaml",
-      )
+      const result = store.testValidate({ name: "  Spaced  ", prompt: "prompt" }, "spaced", "spaced.yaml")
       expect(result!.name).toBe("Spaced")
     })
 
@@ -67,11 +89,7 @@ describe("CustomActionStore.validate()", () => {
     })
 
     it("accepts integer order values", () => {
-      const result = store.testValidate(
-        { name: "Test", prompt: "prompt", order: 42.7 },
-        "test",
-        "test.yaml",
-      )
+      const result = store.testValidate({ name: "Test", prompt: "prompt", order: 42.7 }, "test", "test.yaml")
       expect(result!.order).toBe(42)
     })
   })
