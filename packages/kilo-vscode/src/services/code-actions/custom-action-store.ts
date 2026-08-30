@@ -1,7 +1,9 @@
 // Generated/modified by AI Kilo Code 7.4.17-002-gratex, used model gti-litellm/ornith-1.0
 // Modified by AI Kilo Code 7.4.22-gratex-015, used model gti-litellm/deepseek-v4-flash — subfolder support for .kilo/actions/
+// Modified by AI Kilo Code 7.4.22-gratex-016, used model gti-litellm/deepseek-v4-flash — fix: symlinked action files now load (bitwise FileType check)
 import * as vscode from "vscode"
 import * as path from "path"
+import * as fs from "fs"
 import { parse as parseYaml } from "yaml"
 
 /** Derive the action ID from the action file's path relative to .kilo/actions/.
@@ -76,8 +78,23 @@ export class CustomActionStore implements vscode.Disposable {
     return results.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
   }
 
-  /** Recursively collect *.yaml/*.yml files under dir (including subfolders). */
-  private async findYamlFiles(dir: vscode.Uri): Promise<vscode.Uri[]> {
+  /** Recursively collect *.yaml/*.yml files under dir (including subfolders and symlinks).
+   *  readDirectory reports symlinks as FileType.SymbolicLink OR'd with the target type
+   *  (e.g. 64|1 = 65 for a symlink to a file), so type must be checked bitwise, not with ===.
+   *  Directories are tracked by their realpath so a symlinked dir pointing at an
+   *  ancestor (or sibling) is traversed at most once — no infinite symlink cycles. */
+  private async findYamlFiles(dir: vscode.Uri, visited = new Set<string>()): Promise<vscode.Uri[]> {
+    let real: string
+    try {
+      real = fs.realpathSync.native(dir.fsPath)
+    } catch {
+      return [] // dir doesn't exist — skip silently
+    }
+    if (visited.has(real)) {
+      return [] // already traversed (symlink cycle or duplicate) — skip
+    }
+    visited.add(real)
+
     let entries: [string, vscode.FileType][]
     try {
       entries = await vscode.workspace.fs.readDirectory(dir)
@@ -87,9 +104,9 @@ export class CustomActionStore implements vscode.Disposable {
 
     const files: vscode.Uri[] = []
     for (const [name, type] of entries) {
-      if (type === vscode.FileType.Directory) {
-        files.push(...(await this.findYamlFiles(vscode.Uri.joinPath(dir, name))))
-      } else if (type === vscode.FileType.File && /\.(yaml|yml)$/i.test(name)) {
+      if (type & vscode.FileType.Directory) {
+        files.push(...(await this.findYamlFiles(vscode.Uri.joinPath(dir, name), visited)))
+      } else if (type & vscode.FileType.File && /\.(yaml|yml)$/i.test(name)) {
         files.push(vscode.Uri.joinPath(dir, name))
       }
     }
