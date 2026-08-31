@@ -25,7 +25,7 @@ const whenInactive = test.skipIf(toggleActive)
 describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-depth", () => {
   describe("Toggle ACTIVE (default, unset — telemetry hard-disabled)", () => {
     whenActive("capture handler guard returns true when telemetry disabled", async () => {
-      const mockTrack = mock(() => {})
+      const mockTrack = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => false)
 
       const result = await Effect.runPromise(
@@ -44,7 +44,7 @@ describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-
     })
 
     whenActive("setEnabled handler guard returns true when telemetry disabled", async () => {
-      const mockSetEnabled = mock(() => {})
+      const mockSetEnabled = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => false)
 
       const result = await Effect.runPromise(
@@ -63,7 +63,7 @@ describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-
     })
 
     whenActive("capture handler guard blocks events even with isEnabled=false", async () => {
-      const mockTrack = mock(() => {})
+      const mockTrack = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => false)
 
       const result = await Effect.runPromise(
@@ -81,7 +81,7 @@ describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-
     })
 
     whenActive("setEnabled handler guard blocks re-enablement when disabled", async () => {
-      const mockSetEnabled = mock(() => {})
+      const mockSetEnabled = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => false)
 
       const result = await Effect.runPromise(
@@ -101,7 +101,7 @@ describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-
 
   describe("Toggle INACTIVE (GTI_KILO_DISABLE_TELEMETRY=off — upstream behaviour)", () => {
     whenInactive("capture handler guard allows forwarding when telemetry enabled", async () => {
-      const mockTrack = mock(() => {})
+      const mockTrack = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => true)
 
       const result = await Effect.runPromise(
@@ -120,7 +120,7 @@ describe("Telemetry HTTP API handlers — GTI_KILO_DISABLE_TELEMETRY defense-in-
     })
 
     whenInactive("setEnabled handler guard allows forwarding when telemetry enabled", async () => {
-      const mockSetEnabled = mock(() => {})
+      const mockSetEnabled = mock((..._args: unknown[]) => {})
       const mockIsEnabled = mock(() => true)
 
       const result = await Effect.runPromise(

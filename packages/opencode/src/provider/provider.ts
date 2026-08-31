@@ -64,7 +64,7 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
         const id = setTimeout(() => {
           const err = new ProviderError.ResponseStreamError("SSE read timed out")
           ctl.abort(err)
-          void reader.cancel(err)
+          void reader.cancel(err).catch(() => undefined) // kilocode_change - handle Bun 1.4 cancellation rejection
           reject(err)
         }, ms)
 
@@ -1585,8 +1585,8 @@ const layer = Layer.effect(
           // kilocode_change start - config-only providers (not in upstream database) must be added to providers
           // so they survive the env-key check and the empty-models purge. Without this, providers like
           // gti-litellm that rely on {env:} credentials and have no upstream database entry are silently dropped.
-          if (!providers[providerID]) {
-            providers[providerID] = parsed
+          if (!providers[providerID as ProviderV2.ID]) {
+            providers[providerID as ProviderV2.ID] = parsed
           }
           // kilocode_change end
         }

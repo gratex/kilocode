@@ -4,11 +4,12 @@
 import { describe, expect, beforeAll, afterAll } from "bun:test"
 import { Effect, Layer, Ref } from "effect"
 import { HttpClient, HttpClientResponse } from "effect/unstable/http"
-import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Global } from "@opencode-ai/core/global"
 import { ModelsDev } from "@opencode-ai/core/models-dev"
-import { EventV2 } from "@opencode-ai/core/event"
+import { Database } from "@opencode-ai/core/database/database"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { httpClient } from "@opencode-ai/core/effect/app-node-platform"
 import { it } from "./lib/effect"
 import { rm, writeFile, mkdir } from "fs/promises"
 import path from "path"
@@ -67,11 +68,10 @@ const makeMockClient = (state: Ref.Ref<MockState>) =>
   )
 
 const buildLayer = (state: Ref.Ref<MockState>) =>
-  Layer.fresh(ModelsDev.layer).pipe(
-    Layer.provide(Layer.succeed(HttpClient.HttpClient, makeMockClient(state))),
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(EventV2.defaultLayer),
-  )
+  LayerNode.compile(ModelsDev.node, [
+    [httpClient, Layer.succeed(HttpClient.HttpClient, makeMockClient(state))],
+    [Database.node, Database.layerFromPath(":memory:")],
+  ])
 
 const provided = <A, E>(state: Ref.Ref<MockState>, eff: Effect.Effect<A, E, ModelsDev.Service>) =>
   eff.pipe(Effect.provide(buildLayer(state)))
