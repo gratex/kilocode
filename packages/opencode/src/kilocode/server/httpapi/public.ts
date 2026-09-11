@@ -6,6 +6,8 @@ type Schema = {
   default?: unknown
   enum?: string[]
   items?: Schema
+  minimum?: number
+  maximum?: number
   properties?: Record<string, Schema>
   type?: string
 }
@@ -44,6 +46,11 @@ export function matchLegacyKiloOpenApi(input: Record<string, unknown>) {
   )
   if (rules) rules.schema = { const: "project", default: "project", type: "string" }
 
+  const limit = spec.paths?.["/kilocode/session/{sessionID}/board"]?.get?.parameters?.find(
+    (param) => param.in === "query" && param.name === "limit",
+  )
+  if (limit) limit.schema = { type: "integer", minimum: 1, maximum: 50 }
+
   const body = spec.paths?.["/kilo/organization"]?.post?.requestBody?.content?.["application/json"]?.schema
   const ref = body?.$ref?.replace("#/components/schemas/", "")
   const props = ref ? spec.components?.schemas?.[ref]?.properties : body?.properties
@@ -51,7 +58,10 @@ export function matchLegacyKiloOpenApi(input: Record<string, unknown>) {
 
   const json = (path: string) => spec.paths?.[path]?.get?.responses?.["200"]?.content?.["application/json"]
   const profile = json("/kilo/profile")?.schema?.properties
+  const pass = profile?.kiloPass?.properties
+  if (pass?.nextBillingAt) pass.nextBillingAt = nullable(pass.nextBillingAt)
   if (profile?.balance) profile.balance = nullable(profile.balance)
+  if (profile?.kiloPass) profile.kiloPass = nullable(profile.kiloPass)
   if (profile?.currentOrgId) profile.currentOrgId = nullable(profile.currentOrgId)
 
   const sessions = json("/kilo/cloud-sessions")?.schema?.properties
@@ -75,6 +85,11 @@ export function matchLegacyKiloOpenApi(input: Record<string, unknown>) {
 
   const pty = spec.components?.schemas?.Pty?.properties
   if (pty?.sessionID) pty.sessionID = nullable(pty.sessionID)
+
+  const out =
+    spec.paths?.["/session/{sessionID}/branch-name"]?.post?.responses?.["200"]?.content?.["application/json"]?.schema
+      ?.properties
+  if (out?.branch) out.branch = nullable(out.branch)
 
   const update = spec.paths?.["/pty/{ptyID}"]?.put?.requestBody?.content?.["application/json"]?.schema
   const name = update?.$ref?.replace("#/components/schemas/", "")
