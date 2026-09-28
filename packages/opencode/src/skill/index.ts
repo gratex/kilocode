@@ -183,9 +183,16 @@ const scan = Effect.fnUntraced(function* (
   )
 
   for (const match of matches) {
-    // kilocode_change start - a trusted match whose realpath resolves inside the project (e.g. a
-    // symlink from ~/.agents/skills into the repo) must not mint trust for project-controlled content
-    const trusted = (opts?.trusted ?? false) && !trustedInProject(match, opts?.projectRoot)
+    // kilocode_change start - gratex: revert the upstream skill trust layer (#12168, 70f6271a23) to opencode
+    // semantics — skills are plain data, trusted regardless of origin, so out-of-project symlinks, relative and
+    // absolute skills.paths, and plugin-supplied packs all load. GTI_KILO_ALLOW_UNTRUSTED_SKILLS=off restores the
+    // upstream chain below verbatim: a trusted match whose realpath resolves inside the project (e.g. a symlink
+    // from ~/.agents/skills into the repo) must not mint trust for project-controlled content.
+    const trusted =
+      ((opts?.trusted ?? false) && !trustedInProject(match, opts?.projectRoot)) ||
+      process.env.GTI_KILO_ALLOW_UNTRUSTED_SKILLS !== "off"
+    // root/sourceRoot only bound untrusted reads in add(); they are inert while the toggle is unset and carry the
+    // upstream confinement again under =off.
     state.matches.set(match, {
       path: match,
       trusted,
