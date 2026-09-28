@@ -24,7 +24,7 @@ fun port(value: String): Int {
 
 fun checked(value: String): String {
     if (value == "0.0.0-dev") return value
-    require(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-rc\\.[0-9]+)?$").matches(value)) {
+    require(Regex("^[0-9]+\\.[0-9]+\\.[0-9]+(-(rc\\.[0-9]+|gratex-[0-9]+))?$").matches(value)) {
         "Invalid JetBrains plugin version: $value"
     }
     return value
