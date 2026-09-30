@@ -19,6 +19,14 @@ function focusSerial(state: TerminalStateControls, id: string): number {
   return request?.id === id ? request.serial : 0
 }
 
+function focus(state: TerminalStateControls, id: string, report?: (focused: boolean) => void) {
+  return (focused: boolean) => {
+    if (focused) state.setFocusedId(id)
+    else if (state.focusedId() === id) state.setFocusedId(undefined)
+    report?.(focused)
+  }
+}
+
 export interface TerminalTabRenderDeps {
   id: string
   terms: TerminalStateControls
@@ -30,6 +38,7 @@ export interface TerminalTabRenderDeps {
   onMiddleClick: (id: string, e: MouseEvent) => void
   onClose: (id: string) => void
   onCloseOthers: (id: string) => void
+  onCloseToRight?: (id: string) => void
   role?: "tab"
   selected?: boolean
   tabIndex?: number
@@ -49,6 +58,7 @@ export function renderTerminalTab(deps: TerminalTabRenderDeps): JSX.Element {
       label={deps.terms.title(deps.id) ?? term.title}
       tooltip={deps.terms.title(deps.id) ?? term.title}
       status={deps.terms.scriptStatus(deps.id)}
+      state={deps.terms.activity(deps.id)}
       keybind={isActive() ? "" : deps.keybind()}
       closeKeybind={deps.closeKeybind()}
       focused={deps.terms.focusedId() === deps.id}
@@ -61,6 +71,7 @@ export function renderTerminalTab(deps: TerminalTabRenderDeps): JSX.Element {
       onMiddleClick={(e: MouseEvent) => deps.onMiddleClick(deps.id, e)}
       onClose={() => deps.onClose(deps.id)}
       onCloseOthers={() => deps.onCloseOthers(deps.id)}
+      onCloseToRight={deps.onCloseToRight ? () => deps.onCloseToRight!(deps.id) : undefined}
     />
   )
 }
@@ -119,13 +130,10 @@ export function renderTerminalLayer(props: {
                   active={visible()}
                   focusSerial={focusSerial(props.state, term.id)}
                   font={term.font}
-                  onFocusChange={(focused) => {
-                    if (focused) props.state.setFocusedId(term.id)
-                    else if (props.state.focusedId() === term.id) props.state.setFocusedId(undefined)
-                    props.onFocusChange?.(focused)
-                  }}
+                  onFocusChange={focus(props.state, term.id, props.onFocusChange)}
                   onFocusPrompt={props.onFocusPrompt}
                   onTitleChange={(title) => props.state.setTitle(term.id, title)}
+                  onActivityChange={(state) => props.state.setActivity(term.id, state)}
                 />
               </div>
             )
@@ -173,13 +181,10 @@ export function renderSideTerminalLayer(props: {
                 font={term.font}
                 status={() => props.state.scriptStatus(term.id)}
                 restartable={term.kind === undefined}
-                onFocusChange={(focused) => {
-                  if (focused) props.state.setFocusedId(term.id)
-                  else if (props.state.focusedId() === term.id) props.state.setFocusedId(undefined)
-                  props.onFocusChange?.(focused)
-                }}
+                onFocusChange={focus(props.state, term.id, props.onFocusChange)}
                 onFocusPrompt={props.onFocusPrompt}
                 onTitleChange={(title) => props.state.setTitle(term.id, title)}
+                onActivityChange={(state) => props.state.setActivity(term.id, state)}
               />
             </div>
           )

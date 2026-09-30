@@ -38,6 +38,10 @@ export function resolveManagedServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessE
   }
 }
 
+export function resolveClaudeMigrationEnv(env: NodeJS.ProcessEnv, enabled: boolean): string {
+  return env.KILO_EXPERIMENTAL_CLAUDE_MIGRATION ?? String(enabled)
+}
+
 export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
@@ -45,6 +49,7 @@ export class ServerManager {
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly onExit?: ServerExitListener,
+    private readonly env?: () => Promise<Record<string, string>>,
   ) {}
 
   /**
@@ -90,10 +95,15 @@ export class ServerManager {
     console.log("[Kilo New] ServerManager: 📄 CLI isFile:", stat.isFile())
     console.log("[Kilo New] ServerManager: 📄 CLI mode (octal):", (stat.mode & 0o777).toString(8))
 
+    const extraEnv = await this.env?.()
     return new Promise((resolve, reject) => {
       console.log("[Kilo New] ServerManager: 🎬 Spawning CLI process:", cliPath, ["serve", "--port", "0"])
       const cfg = vscode.workspace.getConfiguration("kilo-code.new")
       const claudeCompat = cfg.get<boolean>("claudeCodeCompat", false)
+      const claudeMigration = resolveClaudeMigrationEnv(
+        { ...process.env, ...(extraEnv ?? {}) },
+        cfg.get<boolean>("experimental.claudeMigration", false),
+      )
       // Pin cwd so the CLI doesn't inherit the extension host's cwd ("/" under F5 debug)
       // or "$HOME" in empty VS Code windows.
       const folders = vscode.workspace.workspaceFolders
@@ -156,6 +166,8 @@ export class ServerManager {
           ...(!claudeCompat && { KILO_DISABLE_CLAUDE_CODE: "true" }),
           ...resolveTreeSitterEnv(this.context.extensionPath),
           ...bwrapEnv,
+          ...extraEnv,
+          KILO_EXPERIMENTAL_CLAUDE_MIGRATION: claudeMigration,
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: true,

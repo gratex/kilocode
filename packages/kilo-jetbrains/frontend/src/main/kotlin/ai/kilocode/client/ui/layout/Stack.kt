@@ -25,12 +25,27 @@ class StackAxis private constructor(val vertical: Boolean) {
  */
 open class Stack(
     private val axis: StackAxis,
-    private val space: Int = 0,
+    space: Int = 0,
 ) : JPanel(Layout(axis, space)) {
 
     init {
         isOpaque = false
     }
+
+    /**
+     * Base spacing between adjacent visible children.
+     *
+     * A layout manager captures its gap once, so a DPI-derived value (e.g. [ai.kilocode.client.ui.UiStyle.Gap])
+     * would keep its pre-zoom pixel width forever. Reassign this from `updateUI()` on components whose
+     * spacing has to follow the IDE zoom or the active theme.
+     */
+    var space: Int
+        get() = mgr.base
+        set(value) {
+            if (mgr.base == value) return
+            mgr.base = value
+            revalidate()
+        }
 
     fun next(child: Component): Stack {
         add(child)
@@ -64,7 +79,7 @@ open class Stack(
 
     private class Layout(
         private val axis: StackAxis,
-        private val gap: Int,
+        var base: Int,
     ) : LayoutManager2 {
 
         var fit = false
@@ -117,7 +132,7 @@ open class Stack(
                         ready = false
                         if (entry.comp.isVisible) {
                             if (seen) {
-                                val gap = space ?: gap
+                                val gap = space ?: base
                                 if (axis.vertical) y += gap else x += gap
                             }
                             seen = true
@@ -180,7 +195,7 @@ open class Stack(
                             val pref = entry.comp.preferredSize
                             val min = entry.comp.minimumSize
                             val max = entry.comp.maximumSize
-                            items.add(Item(entry.comp, if (seen) space ?: gap else 0, bound(pref.width, min.width, max.width)))
+                            items.add(Item(entry.comp, if (seen) space ?: base else 0, bound(pref.width, min.width, max.width)))
                             seen = true
                             ready = true
                         }
@@ -190,12 +205,12 @@ open class Stack(
             return items
         }
 
-        override fun minimumLayoutSize(parent: Container) = size(parent, MIN)
-        override fun preferredLayoutSize(parent: Container) = size(parent, PREF)
-        override fun maximumLayoutSize(target: Container) = size(target, MAX)
+        override fun minimumLayoutSize(parent: Container) = LayoutPass.size(parent, MIN) { size(parent, MIN) }
+        override fun preferredLayoutSize(parent: Container) = LayoutPass.size(parent, PREF) { size(parent, PREF) }
+        override fun maximumLayoutSize(target: Container) = LayoutPass.size(target, MAX) { size(target, MAX) }
         override fun getLayoutAlignmentX(target: Container) = 0.5f
         override fun getLayoutAlignmentY(target: Container) = 0.5f
-        override fun invalidateLayout(target: Container) = Unit
+        override fun invalidateLayout(target: Container) = LayoutPass.forget(target)
 
         private fun size(parent: Container, kind: Int): Dimension {
             val ins = parent.insets
@@ -215,7 +230,7 @@ open class Stack(
                         pending = null
                         ready = false
                         if (entry.comp.isVisible) {
-                            if (seen) main = safe(main, space ?: gap)
+                            if (seen) main = safe(main, space ?: base)
                             seen = true
                             ready = true
                             val dim = dim(entry.comp, kind)
@@ -275,10 +290,6 @@ private sealed class Entry {
 }
 
 private data class Item(val comp: Component, val gap: Int, val width: Int)
-
-private const val MIN = 0
-private const val PREF = 1
-private const val MAX = 2
 
 private fun safe(value: Int, extra: Int): Int {
     val next = value.toLong() + extra.toLong()

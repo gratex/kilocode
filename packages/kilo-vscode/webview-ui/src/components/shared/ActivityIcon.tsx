@@ -15,8 +15,17 @@ export const ActivityIcon: Component<{
     <Match when={props.state === "waiting" || props.state === "error"}>
       <Icon name="warning" size="small" />
     </Match>
+    <Match when={props.state === "scheduled"}>
+      <Icon name="clock" size="small" />
+    </Match>
     <Match when={props.state === "done"}>
       <Icon name="circle-check" size="small" />
     </Match>
   </Switch>
+)
+
+export const LocalActivity: Component<{ state: Activity; label: string }> = (props) => (
+  <span class="am-local-status" data-activity={props.state} aria-label={props.label}>
+    <ActivityIcon state={props.state} idle={<Icon name="local" size="small" />} />
+  </span>
 )

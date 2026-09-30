@@ -1,4 +1,3 @@
-// kilocode_change - new file
 import path from "path"
 import fs from "fs/promises"
 import { Cause, Effect, Exit, Fiber, Scope } from "effect"
@@ -12,11 +11,15 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { PlanFollowup } from "@/kilocode/plan-followup"
 import { PlanFile } from "@/kilocode/plan-file"
 import { KiloSession } from "@/kilocode/session"
+import type { SessionDrain } from "@/kilocode/session/drain"
+import type { EventV2 } from "@opencode-ai/core/event"
+import { Interrupted } from "@opencode-ai/schema/kilocode/session-drain"
 import { KiloSessionMessageOrder } from "@/kilocode/session/message-order"
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
 import { Permission } from "@/permission"
 import { PermissionProvenance } from "@/kilocode/permission/provenance"
 import { Question } from "@/question"
+import { InstanceRef } from "@/effect/instance-ref"
 import { environmentDetails } from "@/kilocode/editor-context"
 import { Identifier } from "@/id/id"
 import { Filesystem } from "@/util/filesystem"
@@ -26,7 +29,6 @@ import { MemoryPaths } from "@kilocode/kilo-memory/effect/paths"
 import { MemoryMarker } from "@/kilocode/memory/marker"
 import { KilocodeSystemPrompt } from "@/kilocode/system-prompt"
 import { KiloToolRegistry } from "@/kilocode/tool/registry"
-import ASK_CODE_SWITCH from "./ask-code-switch.txt"
 import { consumeAutoTitle, markAutoTitle } from "@/kilo-sessions/rename-adoptions"
 
 export namespace KiloSessionPrompt {
@@ -136,51 +138,70 @@ export namespace KiloSessionPrompt {
     question: Pick<Question.Interface, "ask" | "list" | "reject">
   }): Promise<"continue" | "break"> {
     if (!shouldAskPlanFollowup({ messages: input.messages, abort: input.abort })) return "break"
+    const ctx = Instance.current
+    const run = <A, E>(effect: Effect.Effect<A, E>) =>
+      Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx)))
     const ask = Instance.bind(PlanFollowup.ask)
     const action = await ask({
       sessionID: input.sessionID,
       messages: input.messages,
       abort: input.abort,
-      // Keep the request in the listener-local Question service so HTTP replies can resolve it.
+      // Keep the listener-local service for replies and the instance ref for directory-routed events.
       question: {
-        ask: Instance.bind((request: Parameters<Question.Interface["ask"]>[0]) =>
-          Effect.runPromise(input.question.ask(request)),
-        ),
-        list: Instance.bind(() => Effect.runPromise(input.question.list())),
+        ask: Instance.bind((request: Parameters<Question.Interface["ask"]>[0]) => run(input.question.ask(request))),
+        list: Instance.bind(() => run(input.question.list())),
         reject: Instance.bind((requestID: Parameters<Question.Interface["reject"]>[0]) =>
-          Effect.runPromise(input.question.reject(requestID)),
+          run(input.question.reject(requestID)),
         ),
       },
     })
     return action === "continue" ? "continue" : "break"
   }
 
-  export const cancelTree = Effect.fn("KiloSessionPrompt.cancelTree")(function* (input: {
-    sessionID: SessionID
-    sessions: Pick<Session.Interface, "children">
-    cancel: (sessionID: SessionID) => Effect.Effect<void>
-  }) {
-    function descendants(sessionID: SessionID): Effect.Effect<SessionID[]> {
-      return Effect.gen(function* () {
-        const children = yield* input.sessions.children(sessionID)
-        const nested = yield* Effect.forEach(children, (child) => descendants(child.id), { concurrency: "unbounded" })
-        return [...children.map((child) => child.id), ...nested.flat()]
-      })
-    }
+  export const cancelTree = Effect.fn("KiloSessionPrompt.cancelTree")(
+    function* (input: {
+      sessionID: SessionID
+      sessions: Pick<Session.Interface, "children">
+      drain: Pick<SessionDrain.Interface, "track">
+      events: Pick<EventV2.Interface, "publish">
+      cancel: (sessionID: SessionID, opts?: { background?: boolean }) => Effect.Effect<void>
+      stop: (sessionID: SessionID, work: Effect.Effect<void>) => Effect.Effect<void>
+      scope?: "session" | "tree"
+    }) {
+      function descendants(sessionID: SessionID): Effect.Effect<SessionID[]> {
+        return Effect.gen(function* () {
+          const children = yield* input.sessions.children(sessionID)
+          const nested = yield* Effect.forEach(children, (child) => descendants(child.id), { concurrency: "unbounded" })
+          return [...children.map((child) => child.id), ...nested.flat()]
+        })
+      }
 
-    const children = yield* descendants(input.sessionID)
-    yield* Effect.forEach(
-      [input.sessionID, ...children],
-      (sessionID) =>
+      const cancel = (sessionID: SessionID) =>
         Effect.gen(function* () {
           yield* KiloSessionPromptQueue.cancel(sessionID)
           PlanFollowup.abort(sessionID)
           yield* abortIntakes(sessionID)
-          yield* input.cancel(sessionID)
+          yield* input.cancel(sessionID, { background: input.scope !== "session" })
+        })
+
+      yield* input.stop(
+        input.sessionID,
+        Effect.gen(function* () {
+          const children = input.scope === "session" ? [] : yield* descendants(input.sessionID)
+          yield* Effect.forEach(
+            [input.sessionID, ...children],
+            (id) => (id === input.sessionID ? cancel(id) : input.stop(id, cancel(id))),
+            { concurrency: "unbounded", discard: true },
+          )
         }),
-      { concurrency: "unbounded", discard: true },
-    )
-  })
+      )
+    },
+    (work, input) =>
+      input.drain.track(
+        input.sessionID,
+        work.pipe(Effect.ensuring(input.events.publish(Interrupted, { sessionID: input.sessionID }))),
+      ),
+  )
 
   export const recoverDanglingAssistant = Effect.fn("KiloSessionPrompt.recoverDanglingAssistant")(function* (input: {
     sessionID: SessionID
@@ -455,7 +476,7 @@ export namespace KiloSessionPrompt {
       if (msg.info.role !== "user") continue
       if (
         msg.parts.some(
-          (part) => part.type === "text" && part.synthetic && part.text.startsWith("<environment_details>"),
+          (part) => part.type === "text" && part.synthetic && part.text.trimStart().startsWith("<environment_details>"),
         )
       )
         continue
@@ -515,7 +536,7 @@ export namespace KiloSessionPrompt {
     const ctx = Instance.bind(() => Instance.current)()
     const plan = Session.plan(input.session, ctx)
 
-    if (mode(input.agent.name) === "plan") add(NATIVE_PLAN_PROMPT)
+    if (mode(input.agent.name) === "plan") add(`\n\n${NATIVE_PLAN_PROMPT}`)
 
     const file = input.messages ? PlanFile.latest(input.messages) : undefined
     const saved = PlanFile.resolve(file, ctx)
@@ -533,30 +554,14 @@ export namespace KiloSessionPrompt {
       "Use the chosen plan path as the main plan file. Do not write or edit other files unless the user explicitly asks and your permissions allow it.",
       "Project/user instructions about plan location (for example plans/ or .plans/) are authorized when permissions allow them; they do not conflict with this reminder. When finalizing, call plan_exit with the path of the plan file you wrote.",
       "In the visible final response, cite the saved plan path as an inline code span so the client can open it as a document. Cite other user-facing files you create the same way instead of pasting the full file into chat.",
+      ...(Flag.KILO_CLIENT === "vscode"
+        ? ["When the plan is ready for user review, call open_plan with the saved path before calling plan_exit."]
+        : []),
       supportsPlanFollowup()
         ? "When the plan is implementation-ready, write the main plan file and call plan_exit. Do not ask the user to choose between finalizing and refining in chat; the client follow-up after plan_exit asks whether to implement the saved plan or keep refining."
         : 'Before creating or updating the plan file, or calling plan_exit, ask the user to choose exactly one of: "Finalize and save the plan" or "Continue refining". If the user chooses to finalize, write the main plan file, then call plan_exit.',
     ].join("\n")
-    add(`<system-reminder>\n${body}\n</system-reminder>`)
-  }
-
-  export function insertAgentSwitchReminder(input: {
-    agent: { name: string }
-    userMessage: MessageV2.WithParts
-    messages: MessageV2.WithParts[]
-  }) {
-    if (mode(input.agent.name) !== "code") return
-    const prior = input.messages.findLast((msg) => msg.info.id !== input.userMessage.info.id)
-    if (!prior || mode(prior.info.agent) !== "ask") return
-    if (input.userMessage.parts.some((part) => part.type === "text" && part.text === ASK_CODE_SWITCH)) return
-    return {
-      id: PartID.ascending(),
-      messageID: input.userMessage.info.id,
-      sessionID: input.userMessage.info.sessionID,
-      type: "text" as const,
-      text: ASK_CODE_SWITCH,
-      synthetic: true,
-    }
+    add(`\n\n<system-reminder>\n${body}\n</system-reminder>`)
   }
 
   /**

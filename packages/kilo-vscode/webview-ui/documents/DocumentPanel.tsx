@@ -161,7 +161,7 @@ export const DocumentPanel: Component<DocumentPanelProps> = (props) => {
       deleteComment,
       cancelDraft,
       labels: labels(t),
-      activeTerminalId: props.activeTerminalId,
+      activeTerminalId: () => props.activeTerminalId,
     })
   const gutter = (range: SelectedLineRange) => {
     if (draft()) return
@@ -271,6 +271,10 @@ export const DocumentPanel: Component<DocumentPanelProps> = (props) => {
         overlay={(id) => props.tabs().find((tab) => tab.id === id)?.file ?? ""}
         onSelect={props.onSelect}
         onReorder={props.onReorder}
+        drag={(id) => {
+          const tab = props.tabs().find((item) => item.id === id)
+          return tab ? { kind: "file", path: tab.file } : undefined
+        }}
         renderTab={(id, api) => {
           const tab = props.tabs().find((item) => item.id === id)!
           return (

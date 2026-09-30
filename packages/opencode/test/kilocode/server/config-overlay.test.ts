@@ -94,6 +94,58 @@ async function setGlobal(dir: string, value: Config.Info) {
 }
 
 describe("config overlay routes", () => {
+  test("saving an experimental flag refreshes cached tools without restarting the server", async () => {
+    await using global = await tmpdir()
+    await using project = await tmpdir()
+    await using other = await tmpdir()
+    ;(Global.Path as { config: string }).config = global.path
+    const target = Server.Default().app
+    const provider = {
+      enabled_providers: ["test"],
+      provider: {
+        test: {
+          npm: "@ai-sdk/openai-compatible",
+          options: { apiKey: "test", baseURL: "http://localhost:1/v1" },
+          models: { model: { name: "Test", limit: { context: 10000, output: 1000 } } },
+        },
+      },
+    }
+    await config(project.path, provider)
+    await config(other.path, provider)
+    const check = async (dir: string, enabled: boolean) => {
+      const tools = await json<
+        Array<{
+          id: string
+          description: string
+          parameters: { properties: Record<string, unknown> }
+        }>
+      >(await request(target, dir, "/experimental/tool?provider=test&model=model"))
+      expect(tools.some((tool) => tool.id === "generate_image")).toBe(enabled)
+      const task = tools.find((tool) => tool.id === "task")
+      expect(task).toBeDefined()
+      for (const field of ["model", "provider", "variant"]) {
+        expect(Object.hasOwn(task!.parameters.properties, field)).toBe(true)
+      }
+      expect(task!.description.includes("Subagent model selection is enabled")).toBe(true)
+      expect(tools.some((tool) => tool.id === "agent_manager_models")).toBe(true)
+    }
+    await check(project.path, false)
+    await check(other.path, false)
+    for (const enabled of [true, false, true]) {
+      const saved = await json<Overlay>(
+        await request(target, project.path, "/config/overlay", {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ scope: "global", set: { experimental: { image_generation: enabled } } }),
+        }),
+      )
+      expect(saved.effective?.experimental?.image_generation).toBe(enabled)
+      expect(await Bun.file(saved.targets.global.path).text()).toContain(`"image_generation": ${enabled}`)
+      await check(project.path, enabled)
+      await check(other.path, enabled)
+    }
+  })
+
   test("writes a missing project target atomically", async () => {
     await using project = await tmpdir()
     const target = await KilocodeConfigOverlay.target({ scope: "project", directory: project.path })
@@ -108,6 +160,94 @@ describe("config overlay routes", () => {
     expect(result.ok).toBe(true)
     expect(await Bun.file(target.path).text()).toContain('"model": "test/model"')
   })
+
+  test("rejects unknown requested config settings without writing them", async () => {
+    await using project = await tmpdir()
+    const target = await KilocodeConfigOverlay.target({ scope: "project", directory: project.path })
+
+    const result = await KilocodeConfigWriter.write({
+      scope: "project",
+      directory: project.path,
+      expected: target,
+      set: { modle: "test/model" },
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    )
+
+    expect(result).toMatchObject({
+      data: { path: target.path, issues: [{ message: "Unrecognized key: modle", path: [] }] },
+    })
+    expect(await Bun.file(target.path).exists()).toBe(false)
+  })
+
+  test("preserves existing unknown settings when writing recognized config", async () => {
+    await using project = await tmpdir()
+    const file = path.join(project.path, "kilo.json")
+    await Bun.write(file, JSON.stringify({ future: { enabled: true } }))
+    const target = await KilocodeConfigOverlay.target({ scope: "project", directory: project.path })
+
+    const result = await KilocodeConfigWriter.write({
+      scope: "project",
+      directory: project.path,
+      expected: target,
+      set: { model: "test/model" },
+    })
+
+    expect(result.ok).toBe(true)
+    expect(await Bun.file(file).json()).toEqual({ future: { enabled: true }, model: "test/model" })
+  })
+
+  test.each([
+    ["V1", '"anthropic/claude-sonnet"'],
+    ["V2", '{ "providerID": "anthropic", "model": "claude-sonnet" }'],
+  ])("preserves %s JSONC and Kilo settings when saving an unrelated setting", async (_version, model) => {
+    await using project = await tmpdir()
+    const file = path.join(project.path, "kilo.jsonc")
+    const before = `{
+  // Keep the user's model format and Kilo settings.
+  "model": ${model},
+  "privacy_mode": true,
+  "indexing": { "enabled": false, "provider": "ollama" },
+  "autoupdate": true,
+}
+`
+    await Bun.write(file, before)
+    const input = { directory: project.path, worktree: project.path, scope: "project" as const }
+    const target = await KilocodeConfigOverlay.target(input)
+    const result = await KilocodeConfigWriter.write({ ...input, expected: target, set: { autoupdate: false } })
+
+    expect(result).toMatchObject({ ok: true, changed: true })
+    expect(await Bun.file(file).text()).toBe(before.replace('"autoupdate": true', '"autoupdate": false'))
+    expect(await KilocodeConfigOverlay.project(input)).toMatchObject({
+      model: "anthropic/claude-sonnet",
+      privacy_mode: true,
+      indexing: { enabled: false, provider: "ollama" },
+      autoupdate: false,
+    })
+  })
+
+  test.each([{ model: { providerID: "anthropic", model: 42 } }, { permissions: {} }])(
+    "rejects invalid or unsupported config without changing the file: %j",
+    async (value) => {
+      await using project = await tmpdir()
+      const file = path.join(project.path, "kilo.jsonc")
+      const before = JSON.stringify(value)
+      await Bun.write(file, before)
+
+      const error = await KilocodeConfigWriter.write({
+        directory: project.path,
+        worktree: project.path,
+        scope: "project",
+        set: { autoupdate: false },
+      }).then(
+        () => undefined,
+        (err: unknown) => err,
+      )
+      expect(error).toMatchObject({ name: "ConfigInvalidError" })
+      expect(await Bun.file(file).text()).toBe(before)
+    },
+  )
 
   test("ignores a nested unset path when the project target is missing", async () => {
     await using project = await tmpdir()
@@ -700,16 +840,15 @@ describe("config overlay routes", () => {
     const edit = body.effective.permission.edit
     const after = await json<Agent[]>(await req(project.path, "/agent"))
 
-      expect(typeof edit === "string" ? edit : edit?.["*"]).toBe("ask")
-      expect(
-        Permission.evaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action,
-      ).toBe("ask")
-      expect(body.collections.permission.find((item) => item.key === "edit")).toMatchObject({
-        source: "project",
-        overridden: true,
-      })
-    },
-  )
+    expect(typeof edit === "string" ? edit : edit?.["*"]).toBe("ask")
+    expect(Permission.evaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action).toBe(
+      "ask",
+    )
+    expect(body.collections.permission.find((item) => item.key === "edit")).toMatchObject({
+      source: "project",
+      overridden: true,
+    })
+  })
 
   test.serial("refreshes agent permissions after global permission update", async () => {
     await using global = await tmpdir()
