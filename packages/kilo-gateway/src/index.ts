@@ -29,11 +29,23 @@ export {
   fetchProfileWithBalance,
   fetchDefaultModel,
   getKiloProfile,
+  defaultOrganizationId,
   getKiloBalance,
   getKiloDefaultModel,
   promptOrganizationSelection,
 } from "./api/profile.js"
-export { fetchKiloModels, type KiloModelsResult } from "./api/models.js"
+export { fetchKiloPassState } from "./api/kilo-pass.js"
+export {
+  fetchKiloModels,
+  type KiloModelsResult,
+  fetchKiloImageModels,
+  type KiloImageModel,
+  type KiloImageModelsResult,
+  fetchKiloTranscriptionModels,
+  type KiloTranscriptionModel,
+  type KiloTranscriptionModelsResult,
+  supportsTools,
+} from "./api/models.js"
 export {
   EMPTY_KILO_EMBEDDING_MODEL_CATALOG,
   fetchKiloEmbeddingModelCatalog,
@@ -59,7 +71,21 @@ export {
   type OrganizationModeConfig,
 } from "./api/modes.js"
 export { fetchKilocodeNotifications, type KilocodeNotification } from "./api/notifications.js"
-export { fetchCloudSession, fetchCloudSessionForImport, importSessionToDb } from "./cloud-sessions.js"
+export {
+  fetchByokEntries,
+  fetchCodingPlanSubscriptions,
+  fetchCodingPlanUsage,
+  type ByokEntry,
+  type CodingPlanSubscription,
+  type CodingPlanQuotaWindow,
+} from "./api/trpc.js"
+export {
+  fetchCloudSession,
+  fetchCloudSessionForImport,
+  SessionImportValidationError,
+  prepareSessionImport,
+  importSessionToDb,
+} from "./cloud-sessions.js"
 
 // ============================================================================
 // Server Routes (optional - requires hono and OpenCode dependencies)
@@ -69,8 +95,6 @@ export {
   GatewayError,
   UnauthorizedError,
   getOrganizationId,
-  getClawChatCredentials,
-  getClawStatus,
   getCloudSessions,
   getNotifications,
   getProfile,
@@ -94,6 +118,7 @@ export type {
   Organization,
   KilocodeProfile,
   KilocodeBalance,
+  KiloPassState,
   PollOptions,
   PollResult,
   // Provider types
@@ -112,7 +137,6 @@ export {
   ENV_KILO_API_URL,
   DEFAULT_KILO_API_URL,
   KILO_API_BASE,
-  KILO_CHAT_URL,
   KILO_EVENT_SERVICE_URL,
   KILO_OPENROUTER_BASE,
   POLL_INTERVAL_MS,

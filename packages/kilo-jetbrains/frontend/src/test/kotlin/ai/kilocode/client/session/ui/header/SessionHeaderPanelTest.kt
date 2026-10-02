@@ -1,5 +1,6 @@
 package ai.kilocode.client.session.ui.header
 
+import ai.kilocode.client.plugin.KiloBundle
 import ai.kilocode.client.session.model.Reasoning
 import ai.kilocode.client.session.model.StepFinish
 import ai.kilocode.client.session.model.Tool
@@ -19,12 +20,15 @@ import ai.kilocode.rpc.dto.TodoDto
 import ai.kilocode.rpc.dto.TokensDto
 import com.intellij.icons.AllIcons
 import com.intellij.ide.util.PropertiesComponent
+import ai.kilocode.rpc.dto.DiffFileDto
 import java.awt.Cursor
 import java.awt.Color
 import java.awt.Point
 import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 import java.awt.image.BufferedImage
+import javax.swing.JComponent
+import javax.swing.RepaintManager
 import javax.swing.UIManager
 
 class SessionHeaderPanelTest : SessionControllerTestBase() {
@@ -72,7 +76,7 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         assertEquals("cache read 75", panel.cacheReadText())
         assertEquals("1/2 todos complete", panel.todoText())
         assertTrue(panel.todoVisible())
-        assertEquals(style.editorBackground, panel.background)
+        assertEquals(SessionUiStyle.Colors.sessionBackground(), panel.background)
         assertEquals(
             List(panel.foregrounds().size) { style.editorForeground },
             panel.foregrounds(),
@@ -120,6 +124,117 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
         panel.compactButton().doClick()
         flush()
         assertEquals(1, rpc.compacts.size)
+    }
+
+    fun `test board button visibility follows the boardVisible callback`() {
+        val c = promptedHeader()
+        var visible = false
+        val panel = SessionHeaderPanel(c, parent, boardVisible = { visible })
+
+        assertFalse(panel.boardButton().isVisible)
+
+        visible = true
+        panel.update(c.model.header)
+
+        assertTrue(panel.boardButton().isVisible)
+    }
+
+    fun `test board button click invokes onShowBoard`() {
+        val c = promptedHeader()
+        var opened = 0
+        val panel = SessionHeaderPanel(c, parent, boardVisible = { true }, onShowBoard = { opened++ })
+
+        panel.boardButton().doClick()
+
+        assertEquals(1, opened)
+    }
+
+    fun `test clicking session title toggles expansion`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+
+        assertFalse(panel.isExpanded())
+
+        click(panel.titleLabel())
+        assertTrue(panel.isExpanded())
+
+        click(panel.titleLabel())
+        assertFalse(panel.isExpanded())
+    }
+
+    fun `test top row places expand title and right controls`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+        val top = panel.expandButton().parent
+        val layout = top.layout as java.awt.BorderLayout
+
+        assertSame(panel.expandButton(), layout.getLayoutComponent(java.awt.BorderLayout.WEST))
+        assertSame(panel.titleLabel(), layout.getLayoutComponent(java.awt.BorderLayout.CENTER))
+        assertSame(panel.rightPanel(), layout.getLayoutComponent(java.awt.BorderLayout.EAST))
+        assertSame(panel.rightPanel(), panel.compactButton().parent)
+    }
+
+    fun `test agents strip stays hidden for a session with no background agents`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+
+        // Never had a background agent, so the model fires no BackgroundAgentsUpdated event at all —
+        // the strip must still be hidden rather than showing an empty row.
+        assertTrue(panel.isVisible)
+        assertTrue(panel.todoVisible())
+        assertFalse(panel.agentStripPanel().isVisible)
+    }
+
+    fun `test agents strip hides again once the last agent is cleared`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+
+        edt {
+            c.model.setBackgroundAgents(
+                listOf(
+                    ai.kilocode.client.session.background.BackgroundAgent(
+                        job = "job1",
+                        session = "ses_child1",
+                        title = "Explore",
+                        status = ai.kilocode.client.session.background.BackgroundAgentStatus.RUNNING,
+                    ),
+                ),
+            )
+        }
+        assertTrue(panel.agentStripPanel().isVisible)
+
+        edt { c.model.setBackgroundAgents(emptyList()) }
+
+        assertFalse(panel.agentStripPanel().isVisible)
+    }
+
+    fun `test stats body opens directly below the title row and above the strips`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+        val layout = panel.layout as java.awt.BorderLayout
+
+        click(panel.expandButton())
+        assertTrue(panel.isExpanded())
+
+        val south = layout.getLayoutComponent(java.awt.BorderLayout.SOUTH)
+
+        // Title row, then the expandable stats body, then the always-visible strips.
+        assertSame(panel.expandButton().parent, layout.getLayoutComponent(java.awt.BorderLayout.NORTH))
+        assertSame(panel.bodyComponents().first().parent, layout.getLayoutComponent(java.awt.BorderLayout.CENTER))
+        assertTrue(javax.swing.SwingUtilities.isDescendingFrom(panel.todoRowPanel(), south))
+        assertTrue(javax.swing.SwingUtilities.isDescendingFrom(panel.agentStripPanel(), south))
+    }
+
+    fun `test strips stay attached below the title row while the stats body is collapsed`() {
+        val c = promptedHeader()
+        val panel = SessionHeaderPanel(c, parent)
+        val layout = panel.layout as java.awt.BorderLayout
+        val south = layout.getLayoutComponent(java.awt.BorderLayout.SOUTH)
+
+        assertFalse(panel.isExpanded())
+        assertNull(layout.getLayoutComponent(java.awt.BorderLayout.CENTER))
+        assertTrue(javax.swing.SwingUtilities.isDescendingFrom(panel.todoRowPanel(), south))
+        assertTrue(panel.todoVisible())
     }
 
     fun `test todo list starts collapsed and toggles independently`() {
@@ -194,7 +309,7 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
 
         panel.applyStyle(style)
 
-        assertEquals(style.editorBackground, panel.background)
+        assertEquals(SessionUiStyle.Colors.sessionBackground(), panel.background)
         assertEquals(
             List(panel.foregrounds().size) { style.editorForeground },
             panel.foregrounds(),
@@ -676,5 +791,20 @@ class SessionHeaderPanelTest : SessionControllerTestBase() {
 
     private fun reset() {
         PropertiesComponent.getInstance().unsetValue(SessionHeaderPanel.EXPANDED_KEY)
+    }
+
+    private class TrackingRepaintManager(private val watched: JComponent) : RepaintManager() {
+        val dirty = mutableListOf<JComponent>()
+        val invalid = mutableListOf<JComponent>()
+
+        override fun addDirtyRegion(c: JComponent, x: Int, y: Int, w: Int, h: Int) {
+            if (c === watched) dirty.add(c)
+            super.addDirtyRegion(c, x, y, w, h)
+        }
+
+        override fun addInvalidComponent(invalidComponent: JComponent) {
+            if (invalidComponent === watched) invalid.add(invalidComponent)
+            super.addInvalidComponent(invalidComponent)
+        }
     }
 }
