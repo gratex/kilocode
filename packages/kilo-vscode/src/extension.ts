@@ -766,6 +766,7 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register code actions (editor context menus, terminal context menus, keyboard shortcuts)
   registerCodeActions(context, provider, agentManagerProvider, activeTabProvider)
   registerTerminalActions(context, provider, agentManagerProvider)
+  registerCustomActions(context, provider, agentManagerProvider, activeTabProvider)
 
   // Register CodeActionProvider (lightbulb quick fixes)
   context.subscriptions.push(

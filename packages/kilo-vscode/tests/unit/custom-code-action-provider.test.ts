@@ -142,5 +142,50 @@ describe("CustomCodeActionProvider", () => {
         expect(result[0].kind.value).toBe("source")
       })
     })
+
+    describe("robustness", () => {
+      it("returns an empty array when there are no actions at all", () => {
+        const provider = new CustomCodeActionProvider([])
+        const result = provider.provideCodeActions({} as never, makeRange(false) as never, makeContext(0) as never, {} as never)
+        expect(result).toEqual([])
+      })
+
+      it("sets action.command with the run command id and the action id argument", () => {
+        const provider = new CustomCodeActionProvider([makeDef({ id: "my-action", name: "My Action" })])
+        const result = provider.provideCodeActions({} as never, makeRange(false) as never, makeContext(0) as never, {} as never)
+        expect(result[0].command).toEqual({
+          command: "kilo-code.new.customActions.run",
+          title: "My Action",
+          arguments: ["my-action"],
+        })
+      })
+
+      it("preserves the order of the supplied actions", () => {
+        const provider = new CustomCodeActionProvider([
+          makeDef({ id: "a", name: "A" }),
+          makeDef({ id: "b", name: "B" }),
+          makeDef({ id: "c", name: "C" }),
+        ])
+        const result = provider.provideCodeActions({} as never, makeRange(false) as never, makeContext(0) as never, {} as never)
+        expect(result.map((a) => a.title)).toEqual(["A", "B", "C"])
+      })
+
+      it("advertises every kind the YAML schema can produce", () => {
+        // The metadata list must match the kinds reachable via KIND_MAP in
+        // custom-action-store.ts, or VS Code will never call provideCodeActions
+        // for that kind and the lightbulb entry silently never appears.
+        const advertised = CustomCodeActionProvider.metadata.providedCodeActionKinds?.map((k) => k.value) ?? []
+        for (const value of [
+          "quickfix",
+          "refactor",
+          "refactor.extract",
+          "refactor.inline",
+          "refactor.rewrite",
+          "source",
+        ]) {
+          expect(advertised, `metadata must advertise "${value}"`).toContain(value)
+        }
+      })
+    })
   })
 })

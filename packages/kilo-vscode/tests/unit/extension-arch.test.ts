@@ -392,3 +392,61 @@ describe("KiloProvider — continueInWorktree error fallback", () => {
     expect(helper, "must handle missing handler case").toContain("no handler registered")
   })
 })
+
+/**
+ * Custom context-menu actions are a Gratex fork feature (see
+ * doc/04-tech/12-development/kilo-gratex/04-custom-contex-menu-actions.claude.md).
+ *
+ * It is wired at TWO integration points that live outside the feature's own
+ * unit tests:
+ *   1. extension.ts calls registerCustomActions(...) at activation
+ *   2. package.json declares the kilo-code.new.customActions command and adds
+ *      it to the kilo-code.new.editorContextMenu submenu
+ *
+ * Upstream merges repeatedly clobber exactly these two points (both the import
+ * and the call were dropped in merge 9606af1c6f while the feature files and
+ * their unit tests remained intact). The unit tests call registerCustomActions()
+ * directly and never read package.json, so they cannot observe the breakage.
+ * These guard tests assert the wiring explicitly.
+ */
+describe("Custom Actions — extension wiring", () => {
+  const pkg = JSON.parse(fs.readFileSync(PKG_JSON_FILE, "utf-8"))
+  const extension = fs.readFileSync(EXTENSION_FILE, "utf-8")
+  const declared: string[] = pkg.contributes?.commands?.map((c: { command: string }) => c.command) ?? []
+  const submenu: Array<{ command: string; group?: string }> =
+    pkg.contributes?.menus?.["kilo-code.new.editorContextMenu"] ?? []
+
+  it("declares the customActions command in package.json", () => {
+    expect(
+      declared,
+      "contributes.commands must contain kilo-code.new.customActions — " +
+        "the editor context-menu entry silently disappears without it",
+    ).toContain("kilo-code.new.customActions")
+  })
+
+  it("lists customActions in the editor context-menu submenu", () => {
+    const entry = submenu.find((item) => item.command === "kilo-code.new.customActions")
+    expect(
+      entry,
+      "kilo-code.new.editorContextMenu submenu must list kilo-code.new.customActions — " +
+        "otherwise the action never appears in the editor right-click menu",
+    ).toBeDefined()
+  })
+
+  it("calls registerCustomActions() from extension.ts activation", () => {
+    expect(
+      /registerCustomActions\s*\(/.test(extension),
+      "extension.ts must call registerCustomActions(context, provider, agentManagerProvider, activeTabProvider) " +
+        "— an import alone is not enough; without the call the two commands are never registered",
+    ).toBe(true)
+  })
+
+  it("keeps the customActions feature source files present", () => {
+    for (const file of ["custom-actions.ts", "custom-action-store.ts", "custom-code-action-provider.ts"]) {
+      expect(
+        fs.existsSync(path.join(SRC_DIR, "services/code-actions", file)),
+        `feature file missing: src/services/code-actions/${file}`,
+      ).toBe(true)
+    }
+  })
+})

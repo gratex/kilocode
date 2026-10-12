@@ -5,3 +5,7 @@ out/
 storybook-static/
 test-results/
 playwright-report/
+# Scratch dirs from tests/fixtures/node.ts (mkdtemp `.<fixture>-XXXXXX`).
+# Deleted in a finally on success; left behind if a run is aborted (^C).
+.browser-proxy-*/
+.browser-network-*/

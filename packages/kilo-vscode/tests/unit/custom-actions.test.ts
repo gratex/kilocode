@@ -183,4 +183,70 @@ describe("fill", () => {
     )
     expect(result).toBe('Edit /proj/src/run.sh and run "${BASH_SOURCE[0]}"')
   })
+
+  it("substitutes every documented template variable", () => {
+    // Keep this list in sync with doc §11.3 / §11.5 — a variable the docs
+    // promise but fill() drops is a silent prompt-corruption bug.
+    const all = fill(
+      "${filePath}|${absoluteFilePath}|${startLine}|${endLine}|${selectedText}|${userInput}",
+      {
+        filePath: "a.ts",
+        absoluteFilePath: "/x/a.ts",
+        startLine: "1",
+        endLine: "9",
+        selectedText: "code",
+        userInput: "",
+      },
+    )
+    expect(all).toBe("a.ts|/x/a.ts|1|9|code|")
+  })
+
+  it("replaces repeated occurrences of the same variable", () => {
+    expect(fill("${filePath}::${filePath}", { filePath: "x.ts" })).toBe("x.ts::x.ts")
+  })
+
+  it("renders empty string for absent known variables", () => {
+    expect(fill("[${filePath}][${selectedText}]", {})).toBe("[][]")
+  })
+
+  it("renders empty string for empty diagnostics array", () => {
+    expect(fill("A${diagnosticText}B", { diagnostics: [] })).toBe("AB")
+  })
+
+  it("formats diagnostics without a source using [Error]", () => {
+    const rendered = fill("${diagnosticText}", { diagnostics: [{ message: "no source" }] })
+    expect(rendered).toContain("[Error] no source")
+  })
+
+  it("omits the code suffix when a diagnostic has no code", () => {
+    const rendered = fill("${diagnosticText}", { diagnostics: [{ source: "ts", message: "m" }] })
+    expect(rendered).toContain("- [ts] m")
+    expect(rendered).not.toContain("(")
+  })
+
+  it("joins multiple diagnostics with newlines", () => {
+    const rendered = fill("${diagnosticText}", {
+      diagnostics: [
+        { source: "ts", message: "one", code: 1 },
+        { source: "eslint", message: "two", code: 2 },
+      ],
+    })
+    expect(rendered).toContain("- [ts] one (1)")
+    expect(rendered).toContain("- [eslint] two (2)")
+  })
+
+  it("handles numeric codes and string codes identically", () => {
+    const numeric = fill("${diagnosticText}", { diagnostics: [{ source: "s", message: "m", code: 42 }] })
+    const text = fill("${diagnosticText}", { diagnostics: [{ source: "s", message: "m", code: "E42" }] })
+    expect(numeric).toContain("(42)")
+    expect(text).toContain("(E42)")
+  })
+
+  it("leaves a template with no placeholders untouched", () => {
+    expect(fill("plain prompt", params)).toBe("plain prompt")
+  })
+
+  it("does not treat bare $VAR or ${} as a variable", () => {
+    expect(fill("$HOME and ${}", params)).toBe("$HOME and ${}")
+  })
 })

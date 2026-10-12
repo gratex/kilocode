@@ -425,6 +425,11 @@
         "category": "Kilo Code"
       },
       {
+        "command": "kilo-code.new.customActions",
+        "title": "Custom Actions...",
+        "category": "Kilo Code"
+      },
+      {
         "command": "kilo-code.new.terminalAddToContext",
         "title": "Add Terminal Content to Context",
         "category": "Kilo Code"
@@ -616,6 +621,10 @@
         {
           "command": "kilo-code.new.addToContext",
           "group": "1_actions@4"
+        },
+        {
+          "command": "kilo-code.new.customActions",
+          "group": "1_actions@5"
         }
       ],
       "terminal/context": [
