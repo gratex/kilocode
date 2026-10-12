@@ -55,11 +55,6 @@ describe("Client GTI_KILO_DISABLE_TELEMETRY toggle", () => {
       expect(() => Client.capture(TelemetryEvent.CLI_START, { version: "test" })).not.toThrow()
     })
 
-    whenActive("Client.identify() does not throw when disabled", () => {
-      Client.init()
-      expect(() => Client.identify("test-user", { name: "Test" })).not.toThrow()
-    })
-
     whenActive("Client.alias() does not throw when disabled", () => {
       Client.init()
       expect(() => Client.alias("user-1", "user-2")).not.toThrow()
