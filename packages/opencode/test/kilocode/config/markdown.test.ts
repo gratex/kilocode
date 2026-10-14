@@ -1,5 +1,5 @@
 import path from "node:path"
-import { expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { ConfigMarkdown } from "@/config/markdown"
 import { ConfigVariable } from "@/config/variable"
 import { KilocodeMarkdown } from "@/kilocode/config/markdown"
@@ -127,4 +127,70 @@ test("parses frontmatter that needs sanitization on every read of the same conte
     expect(parsed.data.name).toBe(tmp.extra.name)
     expect(parsed.data.description).toBe("Use when: deploying")
   }
+})
+
+describe("skill-dir variables (${SKILL_PATH} / ${CLAUDE_SKILL_DIR})", () => {
+  const item = path.join("/home", "user", "skills", "example", "SKILL.md")
+  const dir = path.join("/home", "user", "skills", "example")
+
+  async function expand(text: string, opts?: { item?: string; trusted?: boolean }, flag?: string) {
+    const prior = process.env.GTI_KILO_SKILL_PATH
+    if (flag === undefined) delete process.env.GTI_KILO_SKILL_PATH
+    else process.env.GTI_KILO_SKILL_PATH = flag
+    try {
+      return await KilocodeMarkdown.substitute(text, opts?.item ?? item, { trusted: opts?.trusted ?? true })
+    } finally {
+      if (prior === undefined) delete process.env.GTI_KILO_SKILL_PATH
+      else process.env.GTI_KILO_SKILL_PATH = prior
+    }
+  }
+
+  test("expands plain, alias, and both composite spellings to the skill directory (default: unset)", async () => {
+    expect(await expand(`scripts: ${"${SKILL_PATH}"}/scripts`)).toBe(`scripts: ${dir}/scripts`)
+    expect(await expand(`scripts: ${"${CLAUDE_SKILL_DIR}"}/scripts`)).toBe(`scripts: ${dir}/scripts`)
+    expect(await expand(`${"${SKILL_PATH:-$CLAUDE_SKILL_DIR}"}/scripts`)).toBe(`${dir}/scripts`)
+    expect(await expand(`${"${CLAUDE_SKILL_DIR:-$SKILL_PATH}"}/scripts`)).toBe(`${dir}/scripts`)
+  })
+
+  test("expands identically for untrusted markdown (expansion is not execution)", async () => {
+    const project = path.join("/home", "user", "project")
+    const nested = path.join(project, ".kilo", "skills", "example", "SKILL.md")
+    const text = "run: ${SKILL_PATH}/scripts/x"
+    expect(await expand(text, { item: nested, trusted: false })).toBe(`run: ${path.dirname(nested)}/scripts/x`)
+  })
+
+  test("GTI_KILO_SKILL_PATH=off leaves tokens literal (upstream behaviour)", async () => {
+    for (const text of ["${SKILL_PATH}", "${CLAUDE_SKILL_DIR}", "${SKILL_PATH:-$CLAUDE_SKILL_DIR}"]) {
+      expect(await expand(text, undefined, "off")).toBe(text)
+    }
+  })
+
+  test('only the exact string "off" disables expansion — "false" and "0" still expand', async () => {
+    for (const flag of ["false", "0", "ON", ""]) {
+      expect(await expand("${SKILL_PATH}", undefined, flag)).toBe(dir)
+    }
+  })
+
+  test("inserts skill directories containing $ verbatim (no backreference processing)", async () => {
+    const dollars = [path.join("/tmp", "$pecial", "SKILL.md"), path.join("/tmp", "s$1kills", "SKILL.md")]
+    for (const dollarItem of dollars) {
+      const expected = path.dirname(dollarItem)
+      expect(await expand("${SKILL_PATH}", { item: dollarItem })).toBe(expected)
+      expect(await expand("${SKILL_PATH}/scripts", { item: dollarItem })).toBe(`${expected}/scripts`)
+    }
+  })
+
+  test("expands each token position exactly once (no double-substitution)", async () => {
+    const nested = path.join("/x", "${SKILL_PATH}", "SKILL.md")
+    expect(await expand("here: ${SKILL_PATH}", { item: nested })).toBe(`here: ${path.dirname(nested)}`)
+  })
+
+  test("non-file sentinels stay literal (builtin guard)", async () => {
+    expect(await expand("a ${SKILL_PATH} b", { item: "builtin" })).toBe("a ${SKILL_PATH} b")
+    expect(await expand("at ${CLAUDE_SKILL_DIR}/x", { item: "<built-in>" })).toBe("at ${CLAUDE_SKILL_DIR}/x")
+    expect(await expand("${SKILL_PATH:-$CLAUDE_SKILL_DIR}", { item: "builtin" })).toBe(
+      "${SKILL_PATH:-$CLAUDE_SKILL_DIR}",
+    )
+    expect(await expand("no tokens here", { item: "builtin" })).toBe("no tokens here")
+  })
 })

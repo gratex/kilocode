@@ -377,6 +377,22 @@ Because the agent decides when to load a skill, embedded commands never run sile
 
 Commands run in the project directory with a per-command timeout, and output is truncated before inlining. Placeholders inside fenced code blocks are treated as documentation examples and never execute, and command output is never re-scanned for further placeholders.
 
+### Skill-directory variables
+
+Because commands run in the project directory (not the skill's own directory), skill bodies can use skill-directory variables instead of hardcoding install-layout paths. All three spellings expand to the absolute directory containing the loaded `SKILL.md`, in prose and inside `` !`command` `` blocks alike:
+
+| Variable | Expands to |
+|---|---|
+| `${SKILL_PATH}` | Directory containing the loaded `SKILL.md` |
+| `${CLAUDE_SKILL_DIR}` | Same value — Claude Code-compatible alias |
+| `${SKILL_PATH:-$CLAUDE_SKILL_DIR}` | Same value — cross-runtime fallback idiom (reversed order also accepted) |
+
+```markdown
+!`find -L "${SKILL_PATH}/scripts" -type f -perm -u+x | sort | sed -n '1,40p'`
+```
+
+Expansion is pure string substitution: it happens even when command execution is disabled or the skill is untrusted, and builtin (non-file) skills keep the tokens literal. Set `GTI_KILO_SKILL_PATH=off` to disable expansion entirely (tokens stay literal, upstream behavior) — only the exact value `off` disables it; unset and every other value expand.
+
 ## Example: Creating a Skill
 
 {% tabs %}
