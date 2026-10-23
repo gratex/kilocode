@@ -1,9 +1,10 @@
+// Generated/modified by AI Claude Code 2.1.309, used model claude-opus-5-5
 // kilocode_change - new file
 /**
  * Tests for the GTI_KILO_NO_MCP_SUBAGENT_CEILING toggle in KiloTask.
  *
- * The toggle only affects the three ceiling-specific functions:
- *   inherited(), permissions(), merge()
+ * The toggle only affects the four ceiling-specific functions:
+ *   inherited(), permissions(), merge(), refresh() (resume of an existing task session)
  *
  * validate() and resolveModel() are NOT part of the ceiling
  * toggle — they are tested unconditionally below.
@@ -106,6 +107,21 @@ describe("KiloTask ceiling ON (GTI_KILO_NO_MCP_SUBAGENT_CEILING=off — kilo beh
     expect(KiloTask.merge(a, b)).toHaveLength(1)
   })
 
+  whenOn("resume: refresh drops a stale catch-all edit deny the fresh ceiling no longer has", () => {
+    const stale: Permission.Ruleset = [
+      { permission: "edit", pattern: "*", action: "deny" },
+      { permission: "edit", pattern: "secrets/**", action: "deny" },
+    ]
+    const result = KiloTask.refresh(stale, [])
+    expect(result).toEqual([{ permission: "edit", pattern: "secrets/**", action: "deny" }])
+    expect(Permission.evaluate("edit", "src/a.ts", result).action).not.toBe("deny")
+  })
+
+  whenOn("resume: refresh keeps a catch-all deny the fresh ceiling reproduces, deduplicated", () => {
+    const deny: Permission.Rule = { permission: "edit", pattern: "*", action: "deny" }
+    expect(KiloTask.refresh([deny], [deny])).toEqual([deny])
+  })
+
   whenOn("parent mymcp_* deny is a hard ceiling — subagent mymcp_mymethod allow is blocked", () => {
     const caller = mkAgent("build", "primary", [
       { permission: "mymcp_mymethod", pattern: "*", action: "deny" },
@@ -156,6 +172,25 @@ describe("KiloTask ceiling OFF (default, unset — opencode behavior)", () => {
     const a: Permission.Ruleset = [{ permission: "bash", pattern: "*", action: "deny" }]
     const b: Permission.Ruleset = [{ permission: "bash", pattern: "*", action: "deny" }]
     expect(KiloTask.merge(a, b)).toHaveLength(2)
+  })
+
+  // 7.8.8 resumed task sessions through merge(); v7.8.17 calls refresh() instead.
+  whenOff("resume: refresh keeps the stored rules and appends the fresh ones (7.8.8 behavior)", () => {
+    const stale: Permission.Ruleset = [{ permission: "edit", pattern: "*", action: "deny" }]
+    const result = KiloTask.refresh(stale, [])
+    expect(result).toEqual([...stale])
+    expect(Permission.evaluate("edit", "src/a.ts", result).action).toBe("deny")
+  })
+
+  whenOff("resume: refresh does not deduplicate, so the last fresh rule still wins", () => {
+    const stale: Permission.Ruleset = [
+      { permission: "edit", pattern: "*", action: "deny" },
+      { permission: "edit", pattern: "*", action: "allow" },
+    ]
+    const fresh: Permission.Ruleset = [{ permission: "edit", pattern: "*", action: "deny" }]
+    const result = KiloTask.refresh(stale, fresh)
+    expect(result).toEqual([...stale, ...fresh])
+    expect(Permission.evaluate("edit", "src/a.ts", result).action).toBe("deny")
   })
 
   whenOff("parent mymcp_* deny does NOT block subagent mymcp_mymethod allow", () => {

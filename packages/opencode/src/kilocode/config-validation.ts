@@ -1,3 +1,4 @@
+// Generated/modified by AI Claude Code 2.1.309, used model claude-opus-5-5
 import path from "path"
 import { type ParseError, parse, printParseErrorCode } from "jsonc-parser"
 import { Schema } from "effect"
@@ -66,7 +67,7 @@ export namespace ConfigValidation {
     return `\n\n<config_validation>\nConfig file validated successfully.\n</config_validation>`
   }
 
-  async function markdown(filepath: string): Promise<string> {
+  async function markdown(filepath: string, ctx = capture()) {
     const dir = path.basename(path.dirname(filepath))
 
     // Determine schema from parent directory
@@ -77,13 +78,13 @@ export namespace ConfigValidation {
     try {
       const trusted = path.isAbsolute(filepath) && ConfigProtection.isAbsolute(filepath)
       // kilocode_change start - GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG=off re-enables the upstream trust block;
-      // otherwise (Gratex default) all config is trusted and capture() avoids the NotFound false positive.
+      // otherwise (Gratex default) all config is trusted. ctx now comes from upstream's capture() parameter (#14064).
       const blockActive = process.env.GTI_KILO_ALLOW_UNTRUSTED_PROJECT_CONFIG === "off"
-      const ctx = capture()
-      const root = ctx ? (ctx.worktree === "/" ? ctx.directory : ctx.worktree) : path.dirname(filepath)
+      const root = ctx == null ? undefined : ctx.worktree === "/" ? ctx.directory : ctx.worktree
+      if (blockActive && !trusted && root == null) return ""
       md = await ConfigMarkdown.parse(filepath, {
         trusted: trusted || !blockActive,
-        fileScope: !blockActive ? undefined : { root, source: filepath },
+        fileScope: !blockActive || trusted || root == null ? undefined : { root, source: filepath },
       })
       // kilocode_change end
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -160,6 +161,7 @@ export namespace ConfigValidation {
    */
   export async function check(filepath: string): Promise<string> {
     if (!isConfig(filepath)) return ""
+    const ctx = capture()
 
     const ext = path.extname(filepath).toLowerCase()
 
@@ -172,7 +174,7 @@ export namespace ConfigValidation {
     }
 
     const prefix = await existing()
-    const validation = JSONC_EXT.has(ext) ? await jsonc(filepath) : ext === ".md" ? await markdown(filepath) : ""
+    const validation = JSONC_EXT.has(ext) ? await jsonc(filepath) : ext === ".md" ? await markdown(filepath, ctx) : ""
 
     if (!validation) return ""
 

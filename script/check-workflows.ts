@@ -36,6 +36,9 @@ const active = new Set([
   "check-org-member.yml",
   "codeql-kotlin.yml",
   "codeql.yml",
+  "community-label.yml",
+  "community-sweep.yml",
+  "community-triage-test.yml",
   "containers.yml",
   "dependabot-auto-merge.yml",
   "docs-build.yml",
@@ -60,6 +63,7 @@ const active = new Set([
   "test.yml",
   "typecheck.yml",
   "validate-cli-smoke.yml",
+  "v2-port-tracker.yml",
   "visual-regression.yml",
   "watch-opencode-releases.yml",
 ])

@@ -1,4 +1,6 @@
+// Generated/modified by AI Claude Code 2.1.309, used model claude-opus-5-5
 import { PostHog } from "posthog-node"
+import { Conda } from "./conda.js" // kilocode_change
 import { Identity } from "./identity.js"
 import { TelemetryEvent } from "./events.js"
 import { createHash } from "node:crypto"
@@ -121,6 +123,11 @@ export namespace Client {
       setEnabled: (_value: boolean) => {
         enabled = false
       },
+    })
+    // Gratex default: never run the conda probe (spawns `conda info`, waits up to 2 s). Telemetry.init()
+    // and Telemetry.setEnabled() start it from the caller's flag, not from Client.isEnabled().
+    Object.assign(Conda, {
+      clientToken: async () => undefined,
     })
   }
   // kilocode_change end
