@@ -1,4 +1,5 @@
 // kilocode_change - new file
+// Generated/modified by AI Kilo Code 7.8.18-gratex-024, used model gti-litellm/mimo-2.6-flash
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { LLMRequestPrep } from "@/session/llm/request"
@@ -7,9 +8,11 @@ import SOUL from "@/kilocode/soul.txt"
 
 const sessionID = "test-soul-session"
 
-const soulless = process.env.GTI_KILO_SOULLESS !== "off"  // unset = soulless (Gratex default)
+// GTI_KILO_SOULLESS_2 is the OPPOSITE polarity of every other GTI_KILO_* toggle:
+// unset (default) = soul SENT (upstream behaviour), only explicitly ="on" suppresses it.
+const soulless = process.env.GTI_KILO_SOULLESS_2 === "on"  // unset = soul sent (default)
 const whenSoulless = test.skipIf(!soulless)
-const whenOriginal = test.skipIf(soulless)
+const whenSoulSent = test.skipIf(soulless)
 
 const baseInput = {
   user: {
@@ -48,18 +51,18 @@ const baseInput = {
   isWorkflow: false,
 }
 
-describe("SystemPrompt.soul — GTI_KILO_SOULLESS (unit)", () => {
-  whenSoulless("returns empty string when GTI_KILO_SOULLESS unset (Gratex default)", () => {
+describe("SystemPrompt.soul — GTI_KILO_SOULLESS_2 (unit)", () => {
+  whenSoulless("returns empty string when GTI_KILO_SOULLESS_2=on (explicit opt-in)", () => {
     expect(SystemPrompt.soul()).toBe("")
   })
 
-  whenOriginal("returns built-in soul when GTI_KILO_SOULLESS=off (upstream)", () => {
+  whenSoulSent("returns built-in soul by default when GTI_KILO_SOULLESS_2 unset", () => {
     expect(SystemPrompt.soul()).toBe(SOUL.trim())
   })
 })
 
-describe("LLMRequestPrep.prepare — GTI_KILO_SOULLESS (integration)", () => {
-  whenSoulless("system prompt does NOT contain soul text when GTI_KILO_SOULLESS unset", async () => {
+describe("LLMRequestPrep.prepare — GTI_KILO_SOULLESS_2 (integration)", () => {
+  whenSoulless("system prompt does NOT contain soul text when GTI_KILO_SOULLESS_2=on", async () => {
     const result = await Effect.runPromise(LLMRequestPrep.prepare(baseInput))
     const systemText = result.system[0]
     expect(systemText).not.toContain("highly skilled software engineer")
@@ -67,7 +70,7 @@ describe("LLMRequestPrep.prepare — GTI_KILO_SOULLESS (integration)", () => {
     expect(systemText).not.toContain(SOUL.trim().slice(0, 40))
   })
 
-  whenOriginal("system prompt contains built-in soul text when GTI_KILO_SOULLESS=off", async () => {
+  whenSoulSent("system prompt contains built-in soul text by default (GTI_KILO_SOULLESS_2 unset)", async () => {
     const result = await Effect.runPromise(LLMRequestPrep.prepare(baseInput))
     const systemText = result.system[0]
     expect(systemText).toContain("highly skilled software engineer")

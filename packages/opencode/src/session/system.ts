@@ -39,7 +39,9 @@ export function instructions() {
 }
 
 export function soul() {
-  if (process.env.GTI_KILO_SOULLESS !== "off") return "" // kilocode_change: soulless by default
+  // kilocode_change: soul sent by default; suppressed only when GTI_KILO_SOULLESS_2=on (replaces GTI_KILO_SOULLESS)
+  // Generated/modified by AI Kilo Code 7.8.18-gratex-024, used model gti-litellm/mimo-2.6-flash
+  if (process.env.GTI_KILO_SOULLESS_2 === "on") return ""
   return SOUL.trim()
 }
 // kilocode_change end

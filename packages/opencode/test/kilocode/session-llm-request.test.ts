@@ -1,3 +1,4 @@
+// Generated/modified by AI Kilo Code 7.8.18-gratex-024, used model gti-litellm/mimo-2.6-flash
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import type { ModelMessage } from "ai"
@@ -12,7 +13,7 @@ import type { Plugin } from "@/plugin"
 import type { Provider } from "@/provider/provider"
 import { LLMRequestPrep } from "@/session/llm/request"
 import { MessageID, SessionID } from "@/session/schema"
-import { SystemPrompt } from "@/session/system"
+import SOUL from "@/kilocode/soul.txt" // kilocode_change - assert against real soul text, not soul() (empty when suppressed)
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(RuntimeFlags.layer({ client: "test" }))
@@ -110,7 +111,7 @@ describe("Kilo persona in generated metadata requests", () => {
 
     expect(result.system[0]).toContain(`${name} generation prompt`)
     expect(result.system[0]).toContain("request-specific system text")
-    expect(result.system[0]).not.toContain(SystemPrompt.soul())
+    expect(result.system[0]).not.toContain(SOUL.trim())
   })
 
   test.each(["title", "branch-name"])("omits the persona from OpenAI OAuth %s generation", async (name) => {
@@ -118,16 +119,18 @@ describe("Kilo persona in generated metadata requests", () => {
 
     expect(result.params.options.instructions).toContain(`${name} generation prompt`)
     expect(result.params.options.instructions).toContain("request-specific system text")
-    expect(result.params.options.instructions).not.toContain(SystemPrompt.soul())
+    expect(result.params.options.instructions).not.toContain(SOUL.trim())
   })
 
-  test("keeps the persona for ordinary agent requests", async () => {
-    const result = await prepare("code")
-    const oauth = await prepare("code", true)
+  // soul text is absent altogether when GTI_KILO_SOULLESS_2=on — presence cannot be asserted then
+  test
+    .skipIf(process.env.GTI_KILO_SOULLESS_2 === "on")("keeps the persona for ordinary agent requests", async () => {
+      const result = await prepare("code")
+      const oauth = await prepare("code", true)
 
-    expect(result.system[0]).toContain(SystemPrompt.soul())
-    expect(oauth.params.options.instructions).toContain(SystemPrompt.soul())
-  })
+      expect(result.system[0]).toContain(SOUL.trim())
+      expect(oauth.params.options.instructions).toContain(SOUL.trim())
+    })
 })
 
 describe("LLM request output tokens", () => {
