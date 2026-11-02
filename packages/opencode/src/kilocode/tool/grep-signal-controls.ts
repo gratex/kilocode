@@ -1,5 +1,6 @@
 import { NonNegativeInt, PositiveInt } from "@opencode-ai/core/schema"
 import { Schema } from "effect"
+import { followEnabled } from "@/kilocode/symlinks"
 
 export const DEFAULT_LIMIT = 100
 
@@ -23,6 +24,7 @@ type Input = {
   readonly limit?: number
   readonly literal?: boolean
   readonly ignoreCase?: boolean
+  readonly follow?: boolean
 }
 
 export const metadata = (input: Input, limit: number, context: number) => ({
@@ -37,6 +39,7 @@ export const options = (input: Input, limit: number, context: number) => ({
   context,
   literal: input.literal,
   ignoreCase: input.ignoreCase,
+  follow: input.follow ?? followEnabled(),
 })
 
 export const describe = (description: string) => `${description}

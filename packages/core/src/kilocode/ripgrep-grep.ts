@@ -29,6 +29,8 @@ export interface Options {
   readonly context?: number
   readonly literal?: boolean
   readonly ignoreCase?: boolean
+  /** GTI_KILO_SYMLINKS: pass `--follow` so grep descends through symbolic links. */
+  readonly follow?: boolean
 }
 
 export type GrepMatch = Match & {
@@ -40,6 +42,7 @@ export const flags = (input: Options) => [
   ...(input.literal ? ["--fixed-strings"] : []),
   ...(input.ignoreCase ? ["--ignore-case"] : []),
   ...(input.context ? [`--context=${input.context}`] : []),
+  ...(input.follow ? ["--follow"] : []),
 ]
 
 export const stop = (limit: number) => {

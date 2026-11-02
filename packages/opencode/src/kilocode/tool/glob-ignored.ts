@@ -2,6 +2,7 @@ import path from "path"
 import { Effect } from "effect"
 import type { Ripgrep } from "@opencode-ai/core/ripgrep"
 import type { Config } from "@/config/config"
+import { followEnabled } from "@/kilocode/symlinks"
 
 /**
  * `experimental.glob_include_ignored` names ignored or hidden folders and files that the glob tool should
@@ -76,8 +77,10 @@ function keep(entries: readonly Entry[], file: string) {
 }
 
 /** Run a glob search that also covers the ignored paths listed in `experimental.glob_include_ignored`. */
-export const search = (ripgrep: Ripgrep.Interface, config: Config.Interface, root: string, input: Ripgrep.GlobInput) =>
+export const search = (ripgrep: Ripgrep.Interface, config: Config.Interface, root: string, raw: Ripgrep.GlobInput) =>
   Effect.gen(function* () {
+    // GTI_KILO_SYMLINKS: unset/anything else = follow shortcuts (Gratex), "off" = upstream (blind)
+    const input: Ripgrep.GlobInput = { ...raw, follow: raw.follow ?? followEnabled() }
     const cfg = yield* config.get()
     const extra = plan(cfg.experimental?.glob_include_ignored ?? [], root, input.cwd)
     if (!extra) return yield* ripgrep.glob(input)
