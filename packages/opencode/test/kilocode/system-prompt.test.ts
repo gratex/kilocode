@@ -212,7 +212,8 @@ describe("KiloSessionPrompt.injectEditorContext", () => {
     } as unknown as MessageV2.User
   }
 
-  test("appends the environment details block as its own part, separated from user text", () => {
+  // GTI_KILO_ENVLESS=on skips injection entirely — see 23-KILO_ENVLESS §5.2
+  test.skipIf(process.env.GTI_KILO_ENVLESS === "on")("appends the environment details block as its own part, separated from user text", () => {
     const messageID = "m-user"
     const msgs: MessageV2.WithParts[] = [
       {

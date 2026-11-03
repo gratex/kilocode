@@ -461,6 +461,8 @@ export namespace KiloSessionPrompt {
     sessionID: SessionID
     cache: EnvCache
   }) {
+    // GTI_KILO_ENVLESS=on: no <environment_details> synthetic part (opt-in, exact "on" only)
+    if (process.env.GTI_KILO_ENVLESS === "on") return
     const route = {
       directory: input.session.directory,
       worktree: path.resolve(

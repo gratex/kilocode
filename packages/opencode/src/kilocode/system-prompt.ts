@@ -18,6 +18,8 @@ export namespace KilocodeSystemPrompt {
   }
 
   export function environment(input: { ctx: InstanceContext; model: Provider.Model; editor?: EditorContext }) {
+    // GTI_KILO_ENVLESS=on: strip model line + <env> block (opt-in, exact "on" only)
+    if (process.env.GTI_KILO_ENVLESS === "on") return []
     return [
       [
         `You are powered by the model named ${input.model.api.id}. The exact model ID is ${input.model.providerID}/${input.model.api.id}`,

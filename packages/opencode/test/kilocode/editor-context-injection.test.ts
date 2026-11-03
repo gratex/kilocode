@@ -93,7 +93,8 @@ async function prompt(msgs: MessageV2.WithParts[]) {
   return JSON.stringify(await MessageV2.toModelMessages(msgs, mdl))
 }
 
-describe("injectEditorContext", () => {
+// GTI_KILO_ENVLESS=on skips injection entirely — see 23-KILO_ENVLESS §5.2
+describe.skipIf(process.env.GTI_KILO_ENVLESS === "on")("injectEditorContext", () => {
   test("keeps the previous model prompt byte-identical across turns without persisting blocks", async () => {
     const stored1 = user("2 + 2", Date.parse("2026-08-24T12:00:00Z"), "src/one.ts")
     const turn1 = [structuredClone(stored1)]
