@@ -28,16 +28,8 @@ export type TimelineColor = (typeof palette)[keyof typeof palette]
 
 // ── File operation detection ─────────────────────────────────────────
 
-const READ_TOOLS = new Set(["read", "glob", "grep", "find", "ls", "diagnostics", "warpgrep"])
+const READ_TOOLS = new Set(["read", "glob", "grep", "find", "ls", "diagnostics"])
 const WRITE_TOOLS = new Set(["edit", "write", "patch", "multi_edit", "multiedit", "apply_patch"])
-
-function isRead(name: string): boolean {
-  return READ_TOOLS.has(name)
-}
-
-function isWrite(name: string): boolean {
-  return WRITE_TOOLS.has(name)
-}
 
 // ── Part → color ─────────────────────────────────────────────────────
 
@@ -52,9 +44,9 @@ export function color(part: Part): TimelineColor {
     case "tool": {
       const tp = part as ToolPart
       if (tp.state.status === "error") return palette.error
-      const name = tp.tool.toLowerCase()
-      if (isRead(name)) return palette.read
-      if (isWrite(name)) return palette.write
+      const name = tp.tool
+      if (READ_TOOLS.has(name) || READ_TOOLS.has(name.toLowerCase())) return palette.read
+      if (WRITE_TOOLS.has(name) || WRITE_TOOLS.has(name.toLowerCase())) return palette.write
       return palette.tool
     }
 
@@ -63,6 +55,10 @@ export function color(part: Part): TimelineColor {
 
     case "step-finish":
       return palette.success
+
+    // Model-generated images
+    case "file":
+      return palette.write
 
     default:
       return palette.fallback
@@ -89,6 +85,8 @@ export function label(part: Part, msg?: Message): string {
       return "Step start"
     case "step-finish":
       return auto(msg) && part.model?.modelID ? `Step finish · ${part.model.modelID}` : "Step finish"
+    case "file":
+      return "Image"
     default:
       return "Unknown"
   }

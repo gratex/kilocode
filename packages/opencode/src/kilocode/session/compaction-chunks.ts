@@ -11,6 +11,7 @@ import { MessageID, PartID, type SessionID } from "@/session/schema"
 import type { Session } from "@/session/session"
 import { Token } from "@/util/token"
 import * as Log from "@opencode-ai/core/util/log"
+import { Database } from "@opencode-ai/core/database/database"
 
 type Update = <T extends MessageV2.Part>(part: T) => Effect.Effect<T>
 type UpdateMessage = <T extends MessageV2.Info>(msg: T) => Effect.Effect<T>
@@ -22,8 +23,50 @@ const RATIO = 0.6
 const CONCURRENCY = 3
 const DEPTH = 3
 const OUTPUT = 2_048
+// Chunk budget when the model has no configured context window.
+const UNKNOWN = 50_000
 
 export namespace KiloCompactionChunks {
+  export const EMPTY_SUMMARY =
+    "Compaction did not run: the model returned an empty summary. Retry with /compact. If it keeps failing, start a new session to continue."
+  export const TRUNCATED_SUMMARY =
+    "Compaction did not run: the summary was cut off at the output limit. Retry with /compact. If it keeps failing, start a new session to continue."
+
+  export function incomplete(
+    error: MessageV2.Assistant["error"],
+  ): error is Extract<NonNullable<MessageV2.Assistant["error"]>, { name: "APIError" }> {
+    return (
+      error?.name === "APIError" && (error.data.message === EMPTY_SUMMARY || error.data.message === TRUNCATED_SUMMARY)
+    )
+  }
+
+  export function recover(input: {
+    result: SessionProcessor.Result
+    message: MessageV2.Assistant
+    session: Pick<Session.Interface, "removePart" | "updateMessage">
+  }) {
+    return Effect.gen(function* () {
+      if (input.message.finish !== "length") return input.result
+      const parts = yield* MessageV2.parts(input.message.id)
+      for (const part of parts)
+        yield* input.session.removePart({
+          sessionID: input.message.sessionID,
+          messageID: input.message.id,
+          partID: part.id,
+        })
+      const stopped = input.result === "stop"
+      input.message.finish = stopped ? "error" : undefined
+      input.message.time.completed = stopped ? Date.now() : undefined
+      if (stopped && !input.message.error)
+        input.message.error = new MessageV2.APIError({
+          message: TRUNCATED_SUMMARY,
+          isRetryable: true,
+        }).toObject()
+      yield* input.session.updateMessage(input.message)
+      return stopped ? ("stop" as const) : ("compact" as const)
+    })
+  }
+
   type Chunk = {
     index: number
     messages: MessageV2.WithParts[]
@@ -32,6 +75,7 @@ export namespace KiloCompactionChunks {
   type Output = {
     result: SessionProcessor.Result
     output: string | undefined
+    error: MessageV2.Assistant["error"]
   }
 
   type Deps = {
@@ -46,7 +90,7 @@ export namespace KiloCompactionChunks {
     model: Provider.Model
     cfg: Config.Info
     messages: MessageV2.WithParts[]
-    prompt: string
+    prompt: (context: string[]) => string
     target: MessageV2.Assistant
     outputTokenMax?: number
     updateMessage: UpdateMessage
@@ -64,6 +108,8 @@ export namespace KiloCompactionChunks {
   }
 
   export function needed(input: { cfg: Config.Info; model: Provider.Model; tokens: number; outputTokenMax?: number }) {
+    // Unknown window: try one summary call and let a provider overflow decide.
+    if (!input.model.limit.context) return false
     const mdl = model(input.model, input.outputTokenMax)
     // Apply 1.3x multiplier to token estimate to compensate for Token.estimate
     // under-counting actual provider tokenizer counts by ~15-30%.
@@ -104,6 +150,8 @@ export namespace KiloCompactionChunks {
   }
 
   export function budget(input: { cfg: Config.Info; model: Provider.Model; outputTokenMax?: number }) {
+    // Unknown window: usable() is 0, which would put each message in its own chunk.
+    if (!input.model.limit.context) return UNKNOWN
     const mdl = model(input.model, input.outputTokenMax)
     return Math.max(
       1_000,
@@ -218,16 +266,10 @@ export namespace KiloCompactionChunks {
     ].join("\n")
   }
 
-  function messages(input: { summaries: string[] }) {
-    return input.summaries.map((summary, index) => ({
-      role: "user" as const,
-      content: [
-        {
-          type: "text" as const,
-          text: [`<partial-summary index=\"${index + 1}\">`, summary, "</partial-summary>"].join("\n"),
-        },
-      ],
-    }))
+  function context(input: { summaries: string[] }) {
+    return input.summaries.map((summary, index) =>
+      [`<partial-summary index=\"${index + 1}\">`, summary, "</partial-summary>"].join("\n"),
+    )
   }
 
   function assistant(input: { base: MessageV2.Assistant; sessionID: SessionID }) {
@@ -247,19 +289,17 @@ export namespace KiloCompactionChunks {
   function run(input: Input & { data: LLM.StreamInput["messages"]; text: string }) {
     return Effect.gen(function* () {
       const msg = yield* input.session.updateMessage(assistant({ base: input.target, sessionID: input.sessionID }))
-      const mdl = model(input.model, input.outputTokenMax)
-      const worker = yield* input.processors.create({ assistantMessage: msg, sessionID: input.sessionID, model: mdl })
-      const opts = input.agent.options
-      const agent = {
-        ...input.agent,
-        options: {
-          ...opts,
-          maxOutputTokens: Math.min(
-            mdl.limit.output,
-            typeof opts?.maxOutputTokens === "number" ? opts.maxOutputTokens : mdl.limit.output,
-          ),
-        },
-      }
+      const worker = yield* input.processors.create({
+        assistantMessage: msg,
+        sessionID: input.sessionID,
+        model: input.model,
+      })
+      const opts = { ...input.agent.options }
+      // agent.options feeds into providerOptions; strip maxOutputTokens
+      // so it does not leak into the wire body. The output cap is enforced
+      // independently via the normal LLM request and remaining-window cap.
+      delete opts.maxOutputTokens
+      const agent = { ...input.agent, options: opts }
       const out = yield* Effect.gen(function* () {
         const result = yield* worker.process({
           user: input.user,
@@ -268,10 +308,15 @@ export namespace KiloCompactionChunks {
           tools: {},
           system: [],
           messages: [...input.data, { role: "user", content: [{ type: "text", text: input.text }] }],
-          model: mdl,
+          model: input.model,
         })
-        const parts = MessageV2.parts(worker.message.id)
-        return { result, output: text(worker.message, parts) }
+        const parts = yield* MessageV2.parts(worker.message.id)
+        return {
+          result,
+          output: text(worker.message, parts),
+          finish: worker.message.finish,
+          error: worker.message.error ?? worker.compactError?.(),
+        }
       }).pipe(
         Effect.ensuring(
           input.session.removeMessage({ sessionID: input.sessionID, messageID: worker.message.id }).pipe(Effect.ignore),
@@ -279,9 +324,36 @@ export namespace KiloCompactionChunks {
       )
       const result = out.result
       const output = out.output
-      if (result !== "continue") return { result, output: undefined }
-      if (!output) return { result: "stop" as const, output: undefined }
-      return { result, output }
+      if (out.error || (result !== "continue" && out.finish !== "length"))
+        return { result, output: undefined, error: out.error }
+      if (!output || out.finish === "length")
+        return {
+          result: "stop" as const,
+          output: undefined,
+          error:
+            out.finish === "length"
+              ? new MessageV2.APIError({ message: TRUNCATED_SUMMARY, isRetryable: true }).toObject()
+              : (out.error ?? new MessageV2.APIError({ message: EMPTY_SUMMARY, isRetryable: true }).toObject()),
+        }
+      return { result, output, error: undefined }
+    })
+  }
+
+  function fatal(output: Output | undefined) {
+    return output?.result === "stop" && !!output.error && output.error.name !== "ContextOverflowError"
+  }
+
+  function fail(input: Input, output: Output | undefined) {
+    return Effect.gen(function* () {
+      if (output?.result !== "stop") return false
+      const error = output.error
+      if (!error || error.name === "ContextOverflowError") return false
+
+      input.target.error = error
+      input.target.finish = "error"
+      input.target.time.completed = Date.now()
+      yield* input.updateMessage(input.target)
+      return true
     })
   }
 
@@ -314,10 +386,16 @@ export namespace KiloCompactionChunks {
     })
   }
 
-  function reduce(input: Input & { summaries: string[]; depth: number }): Effect.Effect<Output> {
+  function reduce(
+    input: Input & { summaries: string[]; depth: number },
+  ): Effect.Effect<Output, never, Database.Service> {
     return Effect.gen(function* () {
-      const result = yield* run({ ...input, data: messages({ summaries: input.summaries }), text: input.prompt })
-      if (result.result === "continue") return result
+      const result = yield* run({ ...input, data: [], text: input.prompt(context({ summaries: input.summaries })) })
+      if (
+        result.result === "continue" ||
+        (result.error?.name === "APIError" && result.error.data.message === TRUNCATED_SUMMARY)
+      )
+        return result
       if (input.depth >= DEPTH || input.summaries.length <= 1) return result
 
       const size = Math.ceil(input.summaries.length / 2)
@@ -329,7 +407,8 @@ export namespace KiloCompactionChunks {
         (group) => reduce({ ...input, summaries: group, depth: input.depth + 1 }),
         { concurrency: 1 },
       )
-      if (next.some((item) => item.result !== "continue" || !item.output)) return result
+      const failed = next.find(fatal) ?? next.find((item) => item.result !== "continue" || !item.output)
+      if (failed) return fatal(failed) ? failed : result
       return yield* reduce({ ...input, summaries: next.map((item) => item.output!), depth: input.depth + 2 })
     })
   }
@@ -343,13 +422,20 @@ export namespace KiloCompactionChunks {
       const partial = yield* Effect.forEach(chunks, (chunk) => summarize({ ...input, chunk, total: chunks.length }), {
         concurrency: Math.min(CONCURRENCY, chunks.length),
       })
-      if (partial.some((item) => item.result !== "continue" || !item.output)) return "compact" as const
+      const failed = partial.find(fatal) ?? partial.find((item) => item.result !== "continue" || !item.output)
+      if (failed) {
+        if (yield* fail(input, failed)) return "stop" as const
+        return "compact" as const
+      }
 
       const final =
         chunks.length === 1 && (yield* large({ messages: chunks[0].messages, model: input.model, size }))
           ? partial[0]
           : yield* reduce({ ...input, summaries: partial.map((item) => item.output!), depth: 0 })
-      if (!final || final.result !== "continue" || !final.output) return "compact" as const
+      if (!final || final.result !== "continue" || !final.output) {
+        if (yield* fail(input, final)) return "stop" as const
+        return "compact" as const
+      }
 
       yield* input.updatePart({
         id: PartID.ascending(),

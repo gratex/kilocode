@@ -1,5 +1,5 @@
 import { createHash } from "crypto"
-import { mkdtemp } from "fs/promises"
+import { mkdir, mkdtemp, rm } from "fs/promises"
 import ignore from "ignore"
 import { tmpdir } from "os"
 import { join } from "path"
@@ -309,6 +309,91 @@ describe("DirectoryScanner", () => {
     expect(cache.getHash(open)).toBeDefined()
   })
 
+  test("uses a configured extension allowlist and removes excluded cached files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "scanner-test-"))
+    const cacheDir = await mkdtemp(join(tmpdir(), "scanner-cache-"))
+    const custom = join(root, "main.custom")
+    const excluded = join(root, "main.ts")
+    await Bun.write(custom, "custom source content\n")
+    await Bun.write(excluded, "export const excluded = 1\n")
+
+    const cache = new CacheManager(cacheDir, root)
+    await cache.initialize()
+    cache.updateHash(excluded, "old-hash")
+    const scan = new DirectoryScanner(
+      new Emb(),
+      new Store(),
+      new Parser(),
+      cache,
+      ignore(),
+      1,
+      1,
+      undefined,
+      undefined,
+      [".custom"],
+    )
+
+    const result = await scan.scanDirectory(root)
+
+    expect(result.stats.processed).toBe(1)
+    expect(cache.getHash(custom)).toBeDefined()
+    expect(cache.getHash(excluded)).toBeUndefined()
+  })
+
+  test("skips binary files admitted by a custom extension", async () => {
+    const root = await mkdtemp(join(tmpdir(), "scanner-test-"))
+    const cacheDir = await mkdtemp(join(tmpdir(), "scanner-cache-"))
+    const file = join(root, "data.custom")
+    await Bun.write(file, new Uint8Array([0, 1, 2, 3]))
+    const cache = new CacheManager(cacheDir, root)
+    await cache.initialize()
+    const scan = new DirectoryScanner(
+      new Emb(),
+      new Store(),
+      new Parser(),
+      cache,
+      ignore(),
+      1,
+      1,
+      undefined,
+      undefined,
+      [".custom"],
+    )
+
+    const result = await scan.scanDirectory(root)
+
+    expect(result.stats).toEqual({ processed: 0, skipped: 1 })
+    expect(cache.getHash(file)).toBeUndefined()
+  })
+
+  test("skips files matched by nested .kilocodeignore during full scans", async () => {
+    const root = await mkdtemp(join(tmpdir(), "scanner-test-"))
+    const cacheDir = await mkdtemp(join(tmpdir(), "scanner-cache-"))
+    try {
+      const dir = join(root, "pkg")
+      const blocked = join(dir, "blocked.ts")
+      const open = join(dir, "open.ts")
+
+      await mkdir(dir, { recursive: true })
+      await Bun.write(join(dir, ".kilocodeignore"), "blocked.ts\n")
+      await Bun.write(blocked, "export const blocked = 1\n")
+      await Bun.write(open, "export const open = 1\n")
+
+      const cache = new CacheManager(cacheDir, root)
+      await cache.initialize()
+
+      const scan = new DirectoryScanner(new Emb(), new Store(), new Parser(), cache, await loadIgnore(root), 1, 1)
+      const result = await scan.scanDirectory(root)
+
+      expect(result.stats.processed).toBe(1)
+      expect(cache.getHash(blocked)).toBeUndefined()
+      expect(cache.getHash(open)).toBeDefined()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(cacheDir, { recursive: true, force: true })
+    }
+  })
+
   test("emits retry telemetry for transient batch failures", async () => {
     const root = await mkdtemp(join(tmpdir(), "scanner-test-"))
     const cacheDir = await mkdtemp(join(tmpdir(), "scanner-cache-"))
@@ -344,5 +429,49 @@ describe("DirectoryScanner", () => {
     expect(retry?.attempt).toBe(1)
     expect(retry?.maxRetries).toBe(2)
     expect(retry?.error).toContain("[REDACTED_PATH]")
+  })
+
+  test("keeps capitalized source folders that match ignored dirs case-insensitively", async () => {
+    // The anchored ignore globs (e.g. **/build/**) must match case-sensitively
+    // like FileIgnore.match() does: on glob platforms with a nocase default
+    // (macOS, Windows), they would prune valid sources such as src/Build/Main.ts.
+    // Only the capitalized dirs exist, so this works on case-insensitive volumes
+    // too and catches a regression on the platform where it actually occurs.
+    const root = await mkdtemp(join(tmpdir(), "scanner-test-"))
+    const cacheDir = await mkdtemp(join(tmpdir(), "scanner-cache-"))
+    try {
+      const kept = join(root, "src", "Build", "Main.ts")
+      const keptTarget = join(root, "src", "Target", "Main.ts")
+      const keptDesktop = join(root, "Desktop", "App.ts")
+      const pruned = join(root, "build", "gen.ts")
+      const prunedNested = join(root, "pkg", "build", "gen.ts")
+
+      await mkdir(join(root, "src", "Build"), { recursive: true })
+      await mkdir(join(root, "src", "Target"), { recursive: true })
+      await mkdir(join(root, "Desktop"), { recursive: true })
+      await mkdir(join(root, "build"), { recursive: true })
+      await mkdir(join(root, "pkg", "build"), { recursive: true })
+      await Bun.write(kept, "export const kept = 1\n")
+      await Bun.write(keptTarget, "export const keptTarget = 1\n")
+      await Bun.write(keptDesktop, "export const keptDesktop = 1\n")
+      await Bun.write(pruned, "export const pruned = 1\n")
+      await Bun.write(prunedNested, "export const prunedNested = 1\n")
+
+      const cache = new CacheManager(cacheDir, root)
+      await cache.initialize()
+
+      const scan = new DirectoryScanner(new Emb(), new Store(), new Parser(), cache, ignore(), 1, 1)
+      const result = await scan.scanDirectory(root)
+
+      expect(result.stats.processed).toBe(3)
+      expect(cache.getHash(kept)).toBeDefined()
+      expect(cache.getHash(keptTarget)).toBeDefined()
+      expect(cache.getHash(keptDesktop)).toBeDefined()
+      expect(cache.getHash(pruned)).toBeUndefined()
+      expect(cache.getHash(prunedNested)).toBeUndefined()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+      await rm(cacheDir, { recursive: true, force: true })
+    }
   })
 })

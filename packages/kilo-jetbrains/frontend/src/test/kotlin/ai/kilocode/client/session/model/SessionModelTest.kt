@@ -1,5 +1,7 @@
 package ai.kilocode.client.session.model
 
+import ai.kilocode.client.util.edtWait
+import ai.kilocode.rpc.dto.ChatEventDto
 import ai.kilocode.rpc.dto.DiffFileDto
 import ai.kilocode.rpc.dto.KiloAppStateDto
 import ai.kilocode.rpc.dto.KiloAppStatusDto
@@ -13,6 +15,7 @@ import ai.kilocode.rpc.dto.PartSourceDto
 import ai.kilocode.rpc.dto.PartSourceTextDto
 import ai.kilocode.rpc.dto.PartTimeDto
 import ai.kilocode.rpc.dto.SessionDto
+import ai.kilocode.rpc.dto.SessionRevertDto
 import ai.kilocode.rpc.dto.SessionTimeDto
 import ai.kilocode.rpc.dto.TodoDto
 import ai.kilocode.rpc.dto.TodoViewDto
@@ -52,6 +55,107 @@ class SessionModelTest : BasePlatformTestCase() {
         assertEquals(KiloWorkspaceStatusDto.PENDING, model.workspace.status)
         assertFalse(model.isReady())
         assertEquals(SessionState.Idle, model.state)
+    }
+
+    fun `test terminal belongs to original user message without ending newer busy turn`() {
+        model.upsertMessage(msg("u1", "user"))
+        model.upsertMessage(msg("u2", "user"))
+        model.setState(SessionState.Busy("newer turn"))
+        model.setQueued(setOf("u1", "u2"))
+        events.clear()
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "failed", "queued", false)
+
+        model.setTerminal(terminal)
+
+        assertEquals(terminal, model.message("u1")!!.terminal)
+        assertNull(model.message("u1")!!.info.error)
+        assertNull(model.message("u2")!!.terminal)
+        assertEquals(setOf("u2"), model.queued)
+        assertEquals(SessionState.Busy("newer turn"), model.state)
+        assertEquals(listOf("QueueChanged [u2]", "MessageUpdated u1"), events.map { it.toString() })
+        events.clear()
+        model.setTerminal(terminal)
+        assertTrue(events.isEmpty())
+        model.setQueued(setOf("u1", "u2"))
+        assertEquals(setOf("u2"), model.queued)
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test terminal before message attaches once without inventing transcript metadata`() {
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "interrupted", "sent", true)
+        model.setTerminal(terminal)
+        assertTrue(model.isEmpty())
+        assertTrue(events.isEmpty())
+
+        model.upsertMessage(msg("u1", "user"))
+        assertEquals(terminal, model.message("u1")!!.terminal)
+        assertEquals(0.0, model.message("u1")!!.info.time.created)
+        assertEquals(1, model.messages().size)
+        events.clear()
+        model.setTerminal(terminal)
+        assertTrue(events.isEmpty())
+        model.upsertMessage(msg("u1", "user").copy(agent = "code"))
+        assertEquals(terminal, model.message("u1")!!.terminal)
+    }
+
+    fun `test first terminal is immutable when a contradictory duplicate arrives`() {
+        model.upsertMessage(msg("u1", "user"))
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "failed", "queued", false)
+        model.setTerminal(terminal)
+        events.clear()
+
+        model.setTerminal(terminal.copy(status = "completed", delivery = "sent", accepted = true))
+
+        assertEquals(terminal, model.message("u1")!!.terminal)
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test completed terminal clears only correlated queue and preserves busy state`() {
+        model.addMessage(msg("u1", "user"))
+        model.setQueued(setOf("u1", "u2"))
+        model.setState(SessionState.Busy("newer turn"))
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "completed", "sent", true)
+        model.setTerminal(terminal)
+        assertEquals(terminal, model.message("u1")!!.terminal)
+        assertEquals(setOf("u2"), model.queued)
+        assertEquals(SessionState.Busy("newer turn"), model.state)
+    }
+
+    fun `test terminal does not attach to assistant or another session`() {
+        model.upsertMessage(msg("a1", "assistant"))
+        model.upsertMessage(msg("u1", "user"))
+        events.clear()
+        model.setTerminal(ChatEventDto.MessageTerminal("ses", "a1", "failed", "sent", true))
+        model.setTerminal(ChatEventDto.MessageTerminal("other", "u1", "failed", "sent", true))
+        assertNull(model.message("a1")!!.terminal)
+        assertNull(model.message("u1")!!.terminal)
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test history reload preserves retained terminals and replay is idempotent`() {
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "failed", "sent", true)
+        model.upsertMessage(msg("u1", "user"))
+        model.setTerminal(terminal)
+        model.loadHistory(listOf(MessageWithPartsDto(msg("u1", "user"), emptyList())))
+        assertEquals(terminal, model.message("u1")!!.terminal)
+        events.clear()
+        model.setTerminal(terminal)
+        assertTrue(events.isEmpty())
+        model.loadHistory(emptyList())
+        model.upsertMessage(msg("u1", "user"))
+        assertNull(model.message("u1")!!.terminal)
+    }
+
+    fun `test history refresh removes terminals from different session and clear resets deferred terminals`() {
+        val terminal = ChatEventDto.MessageTerminal("ses", "u1", "failed", "sent", true)
+        model.setTerminal(terminal)
+        model.loadHistory(listOf(MessageWithPartsDto(msg("u1", "user").copy(sessionID = "other"), emptyList())))
+        assertNull(model.message("u1")!!.terminal)
+        model.clear()
+        model.setTerminal(terminal)
+        model.clear()
+        model.upsertMessage(msg("u1", "user"))
+        assertNull(model.message("u1")!!.terminal)
     }
 
     fun `test model mutation works through EDT`() {
@@ -111,6 +215,46 @@ class SessionModelTest : BasePlatformTestCase() {
         assertTrue(events.isEmpty())
     }
 
+    fun `test reverted count includes user messages from marker`() {
+        model.addMessage(msg("u1", "user"))
+        model.addMessage(msg("a1", "assistant"))
+        model.addMessage(msg("u2", "user"))
+        model.addMessage(msg("a2", "assistant"))
+
+        model.setRevert(SessionRevertDto("u1"))
+        assertEquals(2, model.revertedCount())
+
+        model.setRevert(SessionRevertDto("u2"))
+        assertEquals(1, model.revertedCount())
+
+        model.setRevert(SessionRevertDto("missing"))
+        assertEquals(0, model.revertedCount())
+    }
+
+    fun `test isRevertedMessage matches marker and later messages`() {
+        model.addMessage(msg("u1", "user"))
+        model.addMessage(msg("a1", "assistant"))
+        model.addMessage(msg("u2", "user"))
+        model.addMessage(msg("a2", "assistant"))
+
+        model.setRevert(SessionRevertDto("u2"))
+
+        assertFalse(model.isRevertedMessage("u1"))
+        assertFalse(model.isRevertedMessage("a1"))
+        assertTrue(model.isRevertedMessage("u2"))
+        assertTrue(model.isRevertedMessage("a2"))
+    }
+
+    fun `test snapshotless revert still counts reverted messages`() {
+        model.addMessage(msg("u1", "user"))
+        model.addMessage(msg("a1", "assistant"))
+
+        model.setRevert(SessionRevertDto("u1", snapshot = null))
+
+        assertEquals(1, model.revertedCount())
+        assertTrue(model.isRevertedMessage("u1"))
+    }
+
     fun `test updateContent text creates Text content and fires ContentAdded`() {
         model.addMessage(msg("m1", "assistant"))
         events.clear()
@@ -166,8 +310,57 @@ class SessionModelTest : BasePlatformTestCase() {
         assertTrue(events.isEmpty())
     }
 
-    fun `test updateContent removes existing user text when marked synthetic`() {
+    fun `test updateContent renders the attachment read failure notice`() {
         model.addMessage(msg("m1", "user"))
+        events.clear()
+
+        model.updateContent("m1", readFailurePart())
+
+        val notice = model.message("m1")!!.parts["p1"] as Notice
+        assertEquals("attachment_read_failed", notice.kind)
+        assertEquals("report.jfr", notice.name)
+        assertModel("""
+            user#m1
+            notice#p1 attachment_read_failed report.jfr
+        """)
+    }
+
+    fun `test read failure notice takes the file name from a windows path`() {
+        model.addMessage(msg("m1", "user"))
+
+        model.updateContent("m1", readFailurePart(path = """C:\Users\me\trace.jfr"""))
+
+        assertEquals("trace.jfr", (model.message("m1")!!.parts["p1"] as Notice).name)
+    }
+
+    fun `test typed read failure text stays a normal prompt`() {
+        model.addMessage(msg("m1", "user"))
+
+        model.updateContent("m1", readFailurePart(synthetic = null))
+
+        assertTrue(model.message("m1")!!.parts["p1"] is Text)
+    }
+
+    fun `test synthetic text without the error clause stays hidden`() {
+        model.addMessage(msg("m1", "user"))
+        events.clear()
+
+        model.updateContent("m1", part("p1", "m1", "text", text = "Read tool failed to read /tmp/a.jfr", synthetic = true))
+
+        assertNull(model.message("m1")!!.parts["p1"])
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test loadHistory renders the attachment read failure notice`() {
+        model.loadHistory(listOf(MessageWithPartsDto(msg("m1", "user"), listOf(readFailurePart()))))
+
+        assertModel("""
+            user#m1
+            notice#p1 attachment_read_failed report.jfr
+        """)
+    }
+
+    fun `test updateContent removes existing user text when marked synthetic`() {        model.addMessage(msg("m1", "user"))
         model.updateContent("m1", part("p1", "m1", "text", text = "visible"))
         events.clear()
 
@@ -334,6 +527,7 @@ class SessionModelTest : BasePlatformTestCase() {
         )
 
         val p = model.message("m1")!!.parts["p1"] as Tool
+        assertEquals("m1", p.messageID)
         assertEquals("git log", p.input["command"])
         assertEquals("Show history", p.input["description"])
         assertEquals("state", p.metadata["source"])
@@ -356,6 +550,85 @@ class SessionModelTest : BasePlatformTestCase() {
         assertEquals(ToolKind.GENERIC, p.kind)
         assertEquals(ToolExecState.COMPLETED, p.state)
         assertTrue(events.single() is SessionModelEvent.ContentUpdated)
+    }
+
+    fun `test updateContent task rekeys child tracking when session id changes`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task", "m1", "child_old"))
+        model.upsertChildTool("child_old", childPart("read_old"))
+        assertEquals("read_old", task("m1", "task").childTools.single().id)
+
+        model.updateContent("m1", taskPart("task", "m1", "child_new"))
+        assertTrue(task("m1", "task").childTools.isEmpty())
+
+        model.upsertChildTool("child_old", childPart("read_stale"))
+        assertTrue(task("m1", "task").childTools.isEmpty())
+
+        model.upsertChildTool("child_new", childPart("read_new"))
+        assertEquals("read_new", task("m1", "task").childTools.single().id)
+    }
+
+    fun `test stale child history cannot resurrect removed child tool`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task", "m1", "child"))
+
+        model.removeChildTool("child", "read_old")
+        model.upsertChildTool("child", childPart("read_old"), replace = false)
+
+        assertTrue(task("m1", "task").childTools.isEmpty())
+
+        model.upsertChildTool("child", childPart("read_old"))
+
+        assertEquals("read_old", task("m1", "task").childTools.single().id)
+    }
+
+    fun `test removeContent untracks child tools`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task", "m1", "child"))
+        model.upsertChildTool("child", childPart("read_old"))
+        model.removeContent("m1", "task")
+        events.clear()
+
+        model.upsertChildTool("child", childPart("read_new"))
+
+        assertNull(model.content("m1", "task"))
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test removeMessage untracks child tools`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task", "m1", "child"))
+        model.upsertChildTool("child", childPart("read_old"))
+        model.removeMessage("m1")
+        events.clear()
+
+        model.upsertChildTool("child", childPart("read_new"))
+
+        assertNull(model.message("m1"))
+        assertTrue(events.isEmpty())
+    }
+
+    fun `test childSessions returns spawned task child ids in first-appearance order`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task1", "m1", "child_a"))
+        model.updateContent("m1", taskPart("task2", "m1", "child_b"))
+
+        assertEquals(listOf("child_a", "child_b"), model.childSessions())
+    }
+
+    fun `test childSessions rekeys when a task's child session id changes`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", taskPart("task", "m1", "child_old"))
+        model.updateContent("m1", taskPart("task", "m1", "child_new"))
+
+        assertEquals(listOf("child_new"), model.childSessions())
+    }
+
+    fun `test childSessions is empty without any task tools`() {
+        model.addMessage(msg("m1", "assistant"))
+        model.updateContent("m1", part("p1", "m1", "tool", tool = "bash", state = "completed"))
+
+        assertEquals(emptyList<String>(), model.childSessions())
     }
 
     fun `test updateContent tool updates rich fields`() {
@@ -610,6 +883,19 @@ class SessionModelTest : BasePlatformTestCase() {
             metadata: kind=edit
             """,
         )
+    }
+
+    fun `test text delta without metadata preserves the injected title`() {
+        model.upsertMessage(msg("m1", "user"))
+        model.updateContent(
+            "m1",
+            part("p1", "m1", "text", text = "Update the branch", injectedTitle = "Update from main"),
+        )
+        model.updateContent("m1", part("p1", "m1", "text", text = "Update the branch now"))
+
+        val text = model.message("m1")!!.parts["p1"] as Text
+        assertEquals("Update the branch now", text.content.toString())
+        assertEquals("Update from main", text.injectedTitle)
     }
 
     fun `test loadHistory populates typed contents and fires HistoryLoaded`() {
@@ -958,6 +1244,41 @@ class SessionModelTest : BasePlatformTestCase() {
         assertFalse(step.active)
     }
 
+    /**
+     * Adjacent reasoning parts render through one ReasoningView, so one bar must cover the run.
+     * A bar per part would leave the later ones pointing at the same block, which reads as dead.
+     */
+    fun `test header timeline merges adjacent reasoning parts into one bar`() {
+        model.upsertMessage(msg("a1", "assistant"))
+        model.updateContent("a1", part("r1", "a1", "reasoning", text = "first", time = PartTimeDto(1.0, 2.0)))
+        model.updateContent("a1", part("r2", "a1", "reasoning", text = "second", time = PartTimeDto(1.0, 2.0)))
+        model.updateContent("a1", part("r3", "a1", "reasoning", text = "third", time = PartTimeDto(1.0, 2.0)))
+
+        val timeline = model.header.timeline
+        assertEquals(1, timeline.size)
+        // The run reports the first part, which is the id the merged view is keyed by.
+        assertEquals("r1", timeline.single().part.id)
+    }
+
+    fun `test header timeline keeps reasoning runs split by another part`() {
+        model.upsertMessage(msg("a1", "assistant"))
+        model.updateContent("a1", part("r1", "a1", "reasoning", text = "before", time = PartTimeDto(1.0, 2.0)))
+        model.updateContent("a1", part("t1", "a1", "tool", tool = "bash", state = "completed", title = "Run"))
+        model.updateContent("a1", part("r2", "a1", "reasoning", text = "after", time = PartTimeDto(1.0, 2.0)))
+
+        assertEquals(listOf("r1", "t1", "r2"), model.header.timeline.map { it.part.id })
+    }
+
+    fun `test header timeline reasoning run stays active while any part is unfinished`() {
+        model.upsertMessage(msg("a1", "assistant"))
+        model.updateContent("a1", part("r1", "a1", "reasoning", text = "done", time = PartTimeDto(1.0, 2.0)))
+        // Started with no end: still streaming. A part with no time at all counts as done.
+        model.updateContent("a1", part("r2", "a1", "reasoning", text = "still going", time = PartTimeDto(1.0, null)))
+
+        assertEquals(1, model.header.timeline.size)
+        assertTrue(model.header.timeline.single().active)
+    }
+
     fun `test header timeline clamps large step finish token weight`() {
         model.upsertMessage(msg("a1", "assistant"))
         model.updateContent("a1", part("s1", "a1", "step-finish", tokens = TokensDto(Long.MAX_VALUE, 1, 1, 0, 0)))
@@ -1020,6 +1341,7 @@ class SessionModelTest : BasePlatformTestCase() {
         filename: String? = null,
         synthetic: Boolean? = null,
         source: PartSourceDto? = null,
+        injectedTitle: String? = null,
     ) = PartDto(
         id = id,
         sessionID = "ses",
@@ -1031,6 +1353,7 @@ class SessionModelTest : BasePlatformTestCase() {
         filename = filename,
         synthetic = synthetic,
         source = source,
+        injectedTitle = injectedTitle,
         tool = tool,
         state = state,
         title = title,
@@ -1055,6 +1378,36 @@ class SessionModelTest : BasePlatformTestCase() {
         filename = filename,
         source = source,
     )
+
+    // Exact text the CLI persists when it cannot read an attached file.
+    private fun readFailurePart(
+        path: String = "/tmp/report.jfr",
+        synthetic: Boolean? = true,
+    ) = part(
+        id = "p1",
+        mid = "m1",
+        type = "text",
+        text = "Read tool failed to read $path with the following error: Cannot read binary file: $path",
+        synthetic = synthetic,
+    )
+
+    private fun taskPart(id: String, mid: String, child: String) = part(
+        id = id,
+        mid = mid,
+        type = "tool",
+        tool = "task",
+        metadata = mapOf("sessionId" to child),
+    )
+
+    private fun childPart(id: String) = part(
+        id = id,
+        mid = "child_msg",
+        type = "tool",
+        tool = "read",
+        input = mapOf("filePath" to "src/Main.kt"),
+    )
+
+    private fun task(mid: String, id: String) = model.content(mid, id) as Tool
 
     private fun question(id: String) = Question(
         id = id,
@@ -1082,10 +1435,5 @@ class SessionModelTest : BasePlatformTestCase() {
         assertEquals(expected.trimIndent().trim(), model.toString().trim())
     }
 
-    private fun <T> edt(block: () -> T): T {
-        var result: T? = null
-        ApplicationManager.getApplication().invokeAndWait { result = block() }
-        @Suppress("UNCHECKED_CAST")
-        return result as T
-    }
+    private fun <T> edt(block: () -> T): T = edtWait(block)
 }

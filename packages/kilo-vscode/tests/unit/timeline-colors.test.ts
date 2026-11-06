@@ -7,6 +7,7 @@ import type {
   ReasoningPart,
   StepStartPart,
   StepFinishPart,
+  FilePart,
 } from "../../webview-ui/src/types/messages"
 
 function mkText(text = "hello"): TextPart {
@@ -33,6 +34,10 @@ function mkStepFinish(): StepFinishPart {
   return { id: "sf1", type: "step-finish", reason: "done" }
 }
 
+function mkImage(): FilePart {
+  return { id: "f1", type: "file", mime: "image/png", url: "data:image/png;base64,AAAA" }
+}
+
 describe("timeline colors", () => {
   it("classifies text parts as text color", () => {
     expect(color(mkText())).toBe(palette.text)
@@ -48,7 +53,6 @@ describe("timeline colors", () => {
     expect(color(mkTool("grep"))).toBe(palette.read)
     expect(color(mkTool("ls"))).toBe(palette.read)
     expect(color(mkTool("diagnostics"))).toBe(palette.read)
-    expect(color(mkTool("warpgrep"))).toBe(palette.read)
   })
 
   it("classifies write tools as write color", () => {
@@ -78,6 +82,10 @@ describe("timeline colors", () => {
     expect(color(mkStepFinish())).toBe(palette.success)
   })
 
+  it("classifies generated images as write color", () => {
+    expect(color(mkImage())).toBe(palette.write)
+  })
+
   it("returns fallback for unknown part types", () => {
     const weird = { id: "w1", type: "snapshot" } as unknown as Part
     expect(color(weird)).toBe(palette.fallback)
@@ -96,6 +104,10 @@ describe("timeline labels", () => {
   it("returns tool name for tool parts", () => {
     expect(label(mkTool("bash"))).toBe("bash")
     expect(label(mkTool("read"))).toBe("read")
+  })
+
+  it("returns 'Image' for generated images", () => {
+    expect(label(mkImage())).toBe("Image")
   })
 
   it("returns 'Step start' for step-start", () => {

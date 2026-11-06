@@ -1,15 +1,23 @@
 package ai.kilocode.client.session.controller
 
 import ai.kilocode.client.session.model.SessionState
+import ai.kilocode.rpc.dto.ChatEventDto
 import ai.kilocode.rpc.dto.ConfigDto
 import ai.kilocode.rpc.dto.KiloAppStateDto
 import ai.kilocode.rpc.dto.KiloAppStatusDto
+import ai.kilocode.rpc.dto.MessageErrorDto
 import ai.kilocode.rpc.dto.MessageWithPartsDto
 import ai.kilocode.rpc.dto.PartDto
+import ai.kilocode.rpc.dto.PermissionReplyDto
 import ai.kilocode.rpc.dto.PermissionRequestDto
 import ai.kilocode.rpc.dto.QuestionInfoDto
+import ai.kilocode.rpc.dto.QuestionReplyDto
 import ai.kilocode.rpc.dto.QuestionRequestDto
+import ai.kilocode.rpc.dto.SessionActivityDto
+import ai.kilocode.rpc.dto.SessionActivityKindDto
 import ai.kilocode.rpc.dto.SessionStatusDto
+import com.intellij.openapi.util.Disposer
+import kotlinx.coroutines.CompletableDeferred
 
 /**
  * Tests for pending permission/question recovery after history load.
@@ -18,6 +26,192 @@ import ai.kilocode.rpc.dto.SessionStatusDto
  * reconnect. JetBrains now does the same in [ai.kilocode.client.session.controller.SessionController.recoverPending].
  */
 class SessionRecoveryTest : SessionControllerTestBase() {
+
+    fun `test hosted snapshot resolves stale interactions without historical approval side effects`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY)
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("old", id, emptyList())))
+        rpc.pendingError = IllegalStateException("Unavailable")
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.PermissionAsked(id, PermissionRequestDto("p1", id, "edit", emptyList())))
+        emit(ChatEventDto.PermissionReplied(id, "p1"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("old", id, emptyList())))
+        emit(ChatEventDto.QuestionRejected(id, "old"))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("idle")))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        assertTrue(m.model.state is SessionState.Idle)
+        assertTrue(rpc.permissionReplies.isEmpty())
+    }
+
+    fun `test hosted snapshot preserves current interactions when pending probe is unavailable`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        rpc.pendingError = IllegalStateException("Unavailable")
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("old", id, emptyList())))
+        emit(ChatEventDto.QuestionRejected(id, "old"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("new", id, emptyList())))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        assertEquals("new", (m.model.state as SessionState.AwaitingQuestion).question.id)
+        assertTrue(rpc.questionReplies.isEmpty())
+    }
+
+    fun `test hosted successful empty probe clears stale awaiting card`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        rpc.pendingGate = CompletableDeferred()
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("stale", id, emptyList())))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        rpc.pendingGate!!.complete(Unit)
+        flush()
+        assertTrue(m.model.state is SessionState.Idle)
+    }
+
+    fun `test hosted newer live interaction wins over delayed empty snapshot probe`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        rpc.pendingGate = CompletableDeferred()
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("idle")))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("live", id, emptyList())))
+        rpc.pendingGate!!.complete(Unit)
+        flush()
+        assertEquals("live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test hosted resolved snapshot request is not resurrected by stale successful probe`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        rpc.pendingQuestionList.add(QuestionRequestDto("old", id, emptyList()))
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.QuestionAsked(id, QuestionRequestDto("old", id, emptyList())))
+        emit(ChatEventDto.QuestionRejected(id, "old"))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("idle")))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        assertTrue(m.model.state is SessionState.Idle)
+    }
+
+    fun `test hosted terminal replay is message correlated and preserves another busy turn`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        rpc.session = rpc.session.copy(id = id)
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "user")))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("busy")))
+        val event = ChatEventDto.MessageTerminal(id, "msg1", "failed", "sent", true)
+        repeat(5) { emit(event) }
+        assertTrue(m.model.state is SessionState.Busy)
+        assertEquals("failed", m.model.message("msg1")?.terminal?.status)
+        assertTrue(rpc.prompts.isEmpty())
+        assertTrue(rpc.commands.isEmpty())
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "user")))
+        emit(event)
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("busy")))
+        rpc.statuses.value = mapOf(id to SessionStatusDto("busy"))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        assertEquals(1, m.model.messages().size)
+        assertEquals("failed", m.model.message("msg1")?.terminal?.status)
+        assertTrue(m.model.state is SessionState.Busy)
+    }
+
+    fun `test hosted fence replaces running tool snapshot before applying live output`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("busy")))
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "assistant")))
+        emit(ChatEventDto.PartUpdated(id, part("shell", id, "msg1", "tool", tool = "bash", state = "running")))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "assistant")))
+        emit(ChatEventDto.PartUpdated(id, part("shell", id, "msg1", "tool", tool = "bash", state = "completed")))
+        emit(ChatEventDto.PartUpdated(id, part("answer", id, "msg1", "text", text = "done")))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("idle")))
+        rpc.statuses.value = mapOf(id to SessionStatusDto("idle"))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        emit(ChatEventDto.PartDelta(id, "msg1", "answer", "text", "!"))
+
+        assertTrue(m.model.state is SessionState.Idle)
+        assertEquals(ai.kilocode.client.session.model.ToolExecState.COMPLETED,
+            (m.model.content("msg1", "shell") as ai.kilocode.client.session.model.Tool).state)
+        assertTrue(m.model.toString().contains("done!"))
+    }
+
+    fun `test hosted repeated snapshot removes stale parts without duplicating final text`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "assistant")))
+        emit(ChatEventDto.PartUpdated(id, part("old", id, "msg1", "text", text = "obsolete")))
+        repeat(100) {
+            emit(ChatEventDto.Resnapshot(id, "start"))
+            emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "assistant")))
+            emit(ChatEventDto.PartUpdated(id, part("final", id, "msg1", "text", text = "final output")))
+            emit(ChatEventDto.Resnapshot(id, "complete"))
+        }
+        assertModel("assistant#msg1\ntext#final:\n  final output", m)
+        assertEquals(1, m.model.messages().size)
+    }
+
+    fun `test hosted snapshot recovery does not override newer live busy state`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.MessageUpdated(id, msg("msg1", id, "assistant")))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("idle")))
+        rpc.statuses.value = mapOf(id to SessionStatusDto("busy"))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        emit(ChatEventDto.SessionStatusChanged(id, SessionStatusDto("busy")))
+        assertTrue(m.model.state is SessionState.Busy)
+    }
+
+    fun `test hosted materialized snapshot wins over delayed initial HTTP history`() {
+        val id = "hosted:kilo-cloud:worktree_one:ses_one"
+        projectRpc.state.value = workspaceReady()
+        rpc.history.add(MessageWithPartsDto(msg("old", id, "assistant"), emptyList()))
+        rpc.historyGate = CompletableDeferred()
+        val m = controller(id)
+        collect(m)
+        flush()
+        emit(ChatEventDto.Resnapshot(id, "start"))
+        emit(ChatEventDto.MessageUpdated(id, msg("new", id, "assistant")))
+        emit(ChatEventDto.PartUpdated(id, part("answer", id, "new", "text", text = "new result")))
+        emit(ChatEventDto.Resnapshot(id, "complete"))
+        rpc.historyGate!!.complete(Unit)
+        flush()
+        assertModel("assistant#new\ntext#answer:\n  new result", m)
+    }
 
     override fun setUp() {
         super.setUp()
@@ -82,6 +276,46 @@ class SessionRecoveryTest : SessionControllerTestBase() {
         assertEquals(SessionState.Idle, m.model.state)
     }
 
+    fun `test provider error is recovered from assistant history`() {
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(error = MessageErrorDto(type = "APIError", message = "OpenRouter balance is too low")),
+            emptyList(),
+        ))
+
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        assertSession(
+            """
+            assistant#msg1
+
+            [code] [kilo/gpt-5] [error] [OpenRouter balance is too low]
+            """,
+            m,
+        )
+    }
+
+    fun `test aborted assistant history recovers interrupted outcome`() {
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(error = MessageErrorDto(type = "MessageAbortedError", message = "aborted")),
+            emptyList(),
+        ))
+
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        assertSession(
+            """
+            assistant#msg1
+
+            [code] [kilo/gpt-5] [interrupted]
+            """,
+            m,
+        )
+    }
+
     fun `test permission takes priority over question in recovery`() {
         rpc.pendingPermissionList.add(
             PermissionRequestDto(
@@ -111,6 +345,9 @@ class SessionRecoveryTest : SessionControllerTestBase() {
 
     fun `test busy status is seeded from statuses map`() {
         rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("busy"))
+        // recoverPending() reads the service's status map once, and that map arrives through a flow, so
+        // the seed has to be observable before the controller loads or recovery races it to Idle.
+        assertTrue(waitFor { sessions.statuses.value["ses_test"]?.type == "busy" })
 
         appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
         projectRpc.state.value = workspaceReady()
@@ -132,6 +369,7 @@ class SessionRecoveryTest : SessionControllerTestBase() {
             attempt = 3,
             next = 5000L,
         ))
+        assertTrue(waitFor { sessions.statuses.value["ses_test"]?.type == "retry" })
 
         appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
         projectRpc.state.value = workspaceReady()
@@ -155,6 +393,7 @@ class SessionRecoveryTest : SessionControllerTestBase() {
             message = "No network",
             requestID = "req_xyz",
         ))
+        assertTrue(waitFor { sessions.statuses.value["ses_test"]?.type == "offline" })
 
         appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
         projectRpc.state.value = workspaceReady()
@@ -170,6 +409,195 @@ class SessionRecoveryTest : SessionControllerTestBase() {
         assertEquals("req_xyz", (m.model.state as SessionState.Offline).requestId)
     }
 
+    /**
+     * A session reopened after a failed turn is idle on the server, so recovery has to fall back to the
+     * transcript. Without it the reopened UI shows the failure with no way to act on it, while the UI
+     * that was open when it failed still offers Retry.
+     */
+    fun `test failed tail recovers into error even when the server reports idle`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.history.add(MessageWithPartsDto(msg("msg1", "ses_test", "user"), emptyList()))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg2", "ses_test", "assistant").copy(
+                parentID = "msg1",
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue("Recovery must not drop the failure", state is SessionState.Error)
+        assertEquals("missing credentials", (state as SessionState.Error).message)
+        edt { assertTrue("The reopened session must offer Retry too", m.canRetry()) }
+    }
+
+    fun `test aborted tail recovers as interrupted even when the server reports idle`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                error = MessageErrorDto(type = MessageErrorDto.ABORTED, message = "aborted"),
+            ),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue(state is SessionState.TurnEnded)
+        assertEquals(
+            ai.kilocode.client.session.model.Outcome.INTERRUPTED,
+            (state as SessionState.TurnEnded).outcome,
+        )
+    }
+
+    fun `test incomplete tail recovers even when the server reports idle`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(finish = "unknown"),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue(state is SessionState.TurnEnded)
+        assertEquals(
+            ai.kilocode.client.session.model.Outcome.INCOMPLETE,
+            (state as SessionState.TurnEnded).outcome,
+        )
+        assertEquals("unknown", state.finish)
+    }
+
+    fun `test normal finish does not recover an outcome`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(finish = "stop"),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        assertEquals(SessionState.Idle, m.model.state)
+    }
+
+    fun `test tail error wins over incomplete finish during recovery`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                finish = "unknown",
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue(state is SessionState.Error)
+        assertEquals("missing credentials", (state as SessionState.Error).message)
+    }
+
+    /** An unrecognised status carries no live work either, so the transcript still decides. */
+    fun `test unknown status falls through to the failed tail`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("something-new"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue(state is SessionState.Error)
+        assertEquals("missing credentials", (state as SessionState.Error).message)
+    }
+
+    /** A tail that failed does not outrank a question the server is still waiting on. */
+    fun `test pending question wins over a failed tail`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
+        rpc.pendingQuestionList.add(
+            QuestionRequestDto(
+                id = "q_pending",
+                sessionID = "ses_test",
+                questions = listOf(QuestionInfoDto("Proceed?", "Q")),
+            )
+        )
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+    }
+
+    fun `test retry status wins over a failed tail`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("retry", "Rate limited", attempt = 2, next = 1000L))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+        assertTrue(waitFor { sessions.statuses.value["ses_test"]?.type == "retry" })
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        val state = m.model.state
+        assertTrue("The CLI is still retrying, so that outranks the tail", state is SessionState.Retry)
+        assertEquals(2, (state as SessionState.Retry).attempt)
+    }
+
+    /** Live work still wins: a busy server must not be overridden by an older failed turn. */
+    fun `test busy status wins over a failed tail`() {
+        rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("busy"))
+        rpc.history.add(MessageWithPartsDto(
+            msg("msg1", "ses_test", "assistant").copy(
+                error = MessageErrorDto(type = "APIError", message = "missing credentials"),
+            ),
+            emptyList(),
+        ))
+        assertTrue(waitFor { sessions.statuses.value["ses_test"]?.type == "busy" })
+
+        appRpc.state.value = ai.kilocode.rpc.dto.KiloAppStateDto(ai.kilocode.rpc.dto.KiloAppStatusDto.READY, config = ai.kilocode.rpc.dto.ConfigDto(model = "kilo/gpt-5"))
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        assertTrue(m.model.state is SessionState.Busy)
+    }
+
     fun `test idle status in map leaves controller in Idle`() {
         rpc.statuses.value = mapOf("ses_test" to SessionStatusDto("idle"))
 
@@ -182,7 +610,7 @@ class SessionRecoveryTest : SessionControllerTestBase() {
             """
             [code] [kilo/gpt-5] [idle]
             """,
-            m, show = true,
+            m, show = false,
         )
     }
 
@@ -198,7 +626,7 @@ class SessionRecoveryTest : SessionControllerTestBase() {
             """
             [code] [kilo/gpt-5] [idle]
             """,
-            m, show = true,
+            m, show = false,
         )
     }
 
@@ -365,4 +793,303 @@ class SessionRecoveryTest : SessionControllerTestBase() {
             m, show = true,
         )
     }
+
+    // ------ Reconnect recovery (non-READY -> READY for an already-loaded session) ------
+
+    /**
+     * The primary regression: a plan follow-up `question.asked` lost during a reconnect gap left the
+     * session Busy forever even though the CLI still reports it via the pending-question endpoint.
+     */
+    fun `test reconnect recovers a missed question over stale Busy`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        // A turn opened but its QuestionAsked event was lost — exactly the state a missed live
+        // event leaves behind.
+        emit(ChatEventDto.TurnOpen("ses_test"))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        // The CLI still reports the question through the pending-list endpoint.
+        rpc.pendingQuestionList.add(question("q_missed"))
+
+        // A backend reconnect: app state leaves READY and comes back. Flush between the two writes
+        // so the controller's collector actually observes the intermediate CONNECTING value —
+        // otherwise StateFlow conflation would coalesce the round trip into a no-op (same READY
+        // payload as before) before the collector ever gets scheduled.
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        flush()
+
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        assertEquals("q_missed", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test initial ready does not trigger a second reconnect recovery`() {
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.DISCONNECTED)
+        projectRpc.state.value = workspaceReady()
+        controller("ses_test")
+        flush()
+        val calls = rpc.pendingQuestionCalls
+
+        // A restored tab sees DISCONNECTED -> READY on the first connection. History load already
+        // recovered pending prompts, so this first READY must not start another recovery pass.
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        flush()
+
+        assertEquals(1, calls)
+        assertEquals(calls, rpc.pendingQuestionCalls)
+    }
+
+    fun `test ready to ready config update does not trigger reconnect recovery`() {
+        projectRpc.state.value = workspaceReady()
+        controller("ses_test")
+        flush()
+        val calls = rpc.pendingQuestionCalls
+
+        // Status stays READY; only the config payload changes (e.g. a model list refresh).
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-4"))
+        flush()
+
+        assertEquals(calls, rpc.pendingQuestionCalls)
+    }
+
+    fun `test stale reconnect recovery cannot overwrite a live QuestionAsked`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.TurnOpen("ses_test"))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        // Hold the reconnect recovery's REST fetch open so a live QuestionAsked can land first.
+        // Flush between the two app-state writes so the collector actually observes the
+        // intermediate CONNECTING value instead of StateFlow coalescing the round trip away.
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q_live")))
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+
+        gate.complete(Unit)
+        flush()
+
+        // The stale snapshot (taken before q_live existed) must not overwrite it with Busy.
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        assertEquals("q_live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test stale reconnect recovery cannot resurrect an already replied question`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q1")))
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        // The server still reports it pending at the instant recovery's snapshot is taken —
+        // the reply below races that snapshot, arriving before the commit.
+        rpc.pendingQuestionList.add(question("q1"))
+
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        emit(ChatEventDto.QuestionReplied("ses_test", "q1"))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        gate.complete(Unit)
+        flush()
+
+        // The stale snapshot must not resurrect a question that was already answered.
+        assertTrue(m.model.state is SessionState.Busy)
+    }
+
+    fun `test stale reconnect recovery cannot replace a locally answered question`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q_live")))
+        rpc.pendingQuestionList.add(question("q_stale"))
+
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        edt { m.replyQuestion("q_live", QuestionReplyDto(listOf(listOf("Continue here")))) }
+        gate.complete(Unit)
+        flush()
+
+        // The reply echo can be delayed or lost during the same reconnect. The local action is
+        // authoritative and must invalidate the stale q_stale snapshot before it commits.
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        assertEquals("q_live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test stale reconnect recovery cannot replace a locally answered permission`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.PermissionAsked("ses_test", permission("perm_live")))
+        rpc.pendingPermissionList.add(permission("perm_stale"))
+
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        edt { m.replyPermission("perm_live", PermissionReplyDto("once")) }
+        gate.complete(Unit)
+        flush()
+
+        val state = m.model.state as SessionState.AwaitingPermission
+        assertEquals("perm_live", state.permission.id)
+    }
+
+    fun `test stale reconnect recovery cannot replace a locally rejected question`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q_live")))
+        rpc.pendingQuestionList.add(question("q_stale"))
+
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        edt { m.rejectQuestion("q_live") }
+        gate.complete(Unit)
+        flush()
+
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        assertEquals("q_live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test reconnect recovery result is discarded after controller disposal`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        rpc.pendingQuestionList.add(question("q_late"))
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.CONNECTING)
+        flush()
+        appRpc.state.value = KiloAppStateDto(KiloAppStatusDto.READY, config = ConfigDto(model = "kilo/gpt-5"))
+        settle()
+
+        Disposer.dispose(m)
+        gate.complete(Unit)
+        flush()
+
+        assertEquals(SessionState.Idle, m.model.state)
+    }
+
+    // ------ Backend-activity reconcile and stuck-busy watchdog ------
+
+    /**
+     * The badge path the Agent Manager uses kept the `question.asked` the transcript's per-session
+     * stream dropped. Backend activity still reports the wait, so the controller must probe the
+     * pending-question endpoint rather than stay Busy forever.
+     */
+    fun `test backend activity question recovers a missed prompt over stale Busy`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.TurnOpen("ses_test"))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        rpc.pendingQuestionList.add(question("q_activity"))
+        rpc.activity.value = mapOf("ses_test" to SessionActivityDto("/test", SessionActivityKindDto.QUESTION))
+
+        assertTrue(waitFor { m.model.state is SessionState.AwaitingQuestion })
+        assertEquals("q_activity", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test backend activity reconcile is skipped while a prompt is already shown`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q_live")))
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        val before = rpc.pendingQuestionCalls
+
+        rpc.activity.value = mapOf("ses_test" to SessionActivityDto("/test", SessionActivityKindDto.QUESTION))
+        // Let the activity grace window elapse so a probe would have fired if the gate did not hold.
+        waitFor(700) { false }
+
+        assertEquals(before, rpc.pendingQuestionCalls)
+        assertEquals("q_live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    fun `test backend activity for another session does not probe`() {
+        projectRpc.state.value = workspaceReady()
+        controller("ses_test")
+        flush()
+        val before = rpc.pendingQuestionCalls
+
+        rpc.activity.value = mapOf("ses_other" to SessionActivityDto("/test", SessionActivityKindDto.QUESTION))
+        waitFor(700) { false }
+
+        assertEquals(before, rpc.pendingQuestionCalls)
+    }
+
+    fun `test stale activity recovery cannot overwrite a live QuestionAsked`() {
+        projectRpc.state.value = workspaceReady()
+        val m = controller("ses_test")
+        flush()
+
+        emit(ChatEventDto.TurnOpen("ses_test"))
+        assertTrue(m.model.state is SessionState.Busy)
+
+        // Hold the activity probe's fetch open so a live QuestionAsked can land first.
+        val before = rpc.pendingPermissionCalls
+        val gate = CompletableDeferred<Unit>()
+        rpc.pendingGate = gate
+        rpc.activity.value = mapOf("ses_test" to SessionActivityDto("/test", SessionActivityKindDto.QUESTION))
+        assertTrue(waitFor { rpc.pendingPermissionCalls > before })
+
+        emit(ChatEventDto.QuestionAsked("ses_test", question("q_live")))
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+
+        gate.complete(Unit)
+        flush()
+
+        // The probe's stale snapshot (taken before q_live existed) must not overwrite it.
+        assertTrue(m.model.state is SessionState.AwaitingQuestion)
+        assertEquals("q_live", (m.model.state as SessionState.AwaitingQuestion).question.id)
+    }
+
+    private fun question(id: String) = QuestionRequestDto(
+        id = id,
+        sessionID = "ses_test",
+        questions = listOf(QuestionInfoDto("Ready to implement?", "Plan ready")),
+    )
+
+    private fun permission(id: String) = PermissionRequestDto(
+        id = id,
+        sessionID = "ses_test",
+        permission = "read",
+        patterns = listOf("*.json"),
+    )
 }

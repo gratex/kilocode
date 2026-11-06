@@ -1,5 +1,9 @@
 package ai.kilocode.client.session.model
 
+import ai.kilocode.client.session.background.BackgroundAgent
+import ai.kilocode.client.session.background.BackgroundAgents
+import ai.kilocode.log.KiloLog
+import ai.kilocode.rpc.dto.ChatEventDto
 import ai.kilocode.rpc.dto.DiffFileDto
 import ai.kilocode.rpc.dto.KiloAppStateDto
 import ai.kilocode.rpc.dto.KiloAppStatusDto
@@ -7,9 +11,16 @@ import ai.kilocode.rpc.dto.KiloWorkspaceStateDto
 import ai.kilocode.rpc.dto.KiloWorkspaceStatusDto
 import ai.kilocode.rpc.dto.MessageDto
 import ai.kilocode.rpc.dto.MessageWithPartsDto
+import ai.kilocode.rpc.dto.ModelAutoRoutingDto
+import ai.kilocode.rpc.dto.ModelCapabilitiesDto
+import ai.kilocode.rpc.dto.ModelCostDto
+import ai.kilocode.rpc.dto.ModelOptionsDto
+import ai.kilocode.rpc.dto.ModelTerminalBenchDto
 import ai.kilocode.rpc.dto.PartDto
 import ai.kilocode.rpc.dto.SessionDto
+import ai.kilocode.rpc.dto.SessionRevertDto
 import ai.kilocode.rpc.dto.TodoDto
+import ai.kilocode.rpc.dto.ToolApprovalDto
 import ai.kilocode.rpc.dto.TokensDto
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
@@ -35,13 +46,30 @@ import kotlin.math.roundToInt
 class SessionModel {
 
     companion object {
+        private val LOG = KiloLog.create(SessionModel::class.java)
         /** Part types that are internal server markers and must never be stored or rendered. */
         val SILENT_PART_TYPES = setOf("step-start", "patch")
+
+        /**
+         * Shape of the synthetic user text the CLI persists when it cannot read an attached file:
+         * `Read tool failed to read <path> with the following error: <message>`. The text is
+         * addressed to the model; the client only uses it to recognize the failure and show a
+         * notice. If the wording changes, the part falls back to being hidden like any other
+         * synthetic user text. It is produced in `packages/opencode/src/session/prompt.ts`, and
+         * `packages/opencode/test/kilocode/session-attachment-read-failure.test.ts` pins this
+         * shape so an upstream rewording fails CI.
+         */
+        private const val READ_FAILED = "Read tool failed to read "
+        private const val READ_FAILED_ERROR = " with the following error: "
     }
 
     private val entries = LinkedHashMap<String, Message>()
+    private val terminals = mutableMapOf<String, ChatEventDto.MessageTerminal>()
     private val turnEntries = LinkedHashMap<String, Turn>()
     private val hiddenText = mutableSetOf<Pair<String, String>>()
+    private val childRefs = HashMap<String, ChildRef>()
+    private val childTools = HashMap<String, LinkedHashMap<String, Tool>>()
+    private val childRemoved = HashMap<String, MutableSet<String>>()
 
     var app: KiloAppStateDto = KiloAppStateDto(KiloAppStatusDto.DISCONNECTED)
     var version: String? = null
@@ -63,6 +91,11 @@ class SessionModel {
     var session: SessionDto? = null
         private set
 
+    private var revert: SessionRevertDto? = null
+
+    var queued: Set<String> = emptySet()
+        private set
+
     var header: SessionHeaderSnapshot = emptyHeader()
         private set
 
@@ -71,6 +104,13 @@ class SessionModel {
 
     var todos: List<TodoDto> = emptyList()
         private set
+
+    /** Already dismissal-filtered, already-ordered rows for the background-agents strip. */
+    var backgroundAgents: List<BackgroundAgent> = emptyList()
+        private set
+
+    private var rawBackgroundAgents: List<BackgroundAgent> = emptyList()
+    private var dismissedBackgroundAgents: Set<String> = emptySet()
 
     var compactionCount: Int = 0
         private set
@@ -92,8 +132,40 @@ class SessionModel {
     @RequiresEdt
     fun content(messageId: String, contentId: String): Content? = entries[messageId]?.parts?.get(contentId)
 
+    /**
+     * Every `task` tool's spawned child session id, in the order the tools first appeared —
+     * insertion order of [entries] and of each [Message.parts] map, both `LinkedHashMap`s. Used to
+     * give the shared agent board a stable per-participant avatar (see
+     * `ai.kilocode.client.session.board.BoardAvatars`), not [childRefs], which is unordered.
+     */
+    @RequiresEdt
+    fun childSessions(): List<String> =
+        entries.values.flatMap { it.parts.values }.filterIsInstance<Tool>().mapNotNull { it.childSessionId }
+
     @RequiresEdt
     fun turns(): Collection<Turn> = turnEntries.values
+
+    @RequiresEdt
+    fun revert(): SessionRevertDto? = revert
+
+    @RequiresEdt
+    fun revertedCount(): Int {
+        val mark = revert ?: return 0
+        val idx = entries.keys.indexOf(mark.messageID)
+        if (idx < 0) return 0
+        return entries.values.drop(idx).count { it.info.role == "user" }
+    }
+
+    @RequiresEdt
+    fun isRevertedMessage(id: String): Boolean {
+        val mark = revert ?: return false
+        val idx = entries.keys.indexOf(mark.messageID)
+        val pos = entries.keys.indexOf(id)
+        return idx >= 0 && pos >= idx
+    }
+
+    @RequiresEdt
+    fun isQueued(id: String): Boolean = id in queued
 
     @RequiresEdt
     fun turn(id: String): Turn? = turnEntries[id]
@@ -112,13 +184,13 @@ class SessionModel {
     fun upsertMessage(dto: MessageDto): Boolean {
         val existing = entries[dto.id]
         if (existing != null) {
-            val updated = Message(dto).also { it.parts.putAll(existing.parts) }
+            val updated = Message(dto, terminal(dto)).also { it.parts.putAll(existing.parts) }
             entries[dto.id] = updated
             fire(SessionModelEvent.MessageUpdated(updated))
             updateHeader()
             return false
         }
-        val msg = Message(dto)
+        val msg = Message(dto, terminal(dto))
         entries[dto.id] = msg
         fire(SessionModelEvent.MessageAdded(msg))
         regroup()
@@ -130,7 +202,7 @@ class SessionModel {
     @RequiresEdt
     fun addMessage(dto: MessageDto): Message? {
         if (entries.containsKey(dto.id)) return null
-        val msg = Message(dto)
+        val msg = Message(dto, terminal(dto))
         entries[dto.id] = msg
         fire(SessionModelEvent.MessageAdded(msg))
         regroup()
@@ -140,7 +212,9 @@ class SessionModel {
 
     @RequiresEdt
     fun removeMessage(id: String) {
-        if (entries.remove(id) == null) return
+        terminals.remove(id)
+        val msg = entries.remove(id) ?: return
+        for (part in msg.parts.values) untrackChild(part)
         hiddenText.removeAll { it.first == id }
         fire(SessionModelEvent.MessageRemoved(id))
         regroup()
@@ -151,7 +225,8 @@ class SessionModel {
     fun removeContent(messageId: String, contentId: String) {
         hiddenText.remove(messageId to contentId)
         val msg = entries[messageId] ?: return
-        if (msg.parts.remove(contentId) == null) return
+        val old = msg.parts.remove(contentId) ?: return
+        untrackChild(old)
         fire(SessionModelEvent.ContentRemoved(messageId, contentId))
         updateHeader()
     }
@@ -181,7 +256,38 @@ class SessionModel {
         }
         val content = fromDto(dto)
         msg.parts[dto.id] = content
+        trackChild(messageId, content)
         fire(SessionModelEvent.ContentAdded(messageId, content))
+        updateHeader()
+    }
+
+    @RequiresEdt
+    fun upsertChildTool(child: String, dto: PartDto, replace: Boolean = true) {
+        if (dto.type != "tool") return
+        val ref = childRefs[child] ?: return
+        val msg = entries[ref.messageId] ?: return
+        val parent = msg.parts[ref.partId] as? Tool ?: return
+        val tool = fromDto(dto) as? Tool ?: return
+        val tools = childTools.getOrPut(child) { LinkedHashMap() }
+        if (replace) childRemoved[child]?.remove(dto.id)
+        if (!replace && childRemoved[child]?.contains(dto.id) == true) return
+        if (!replace && tools.containsKey(dto.id)) return
+        tools[dto.id] = tool
+        parent.childTools = tools.values.toList()
+        fire(SessionModelEvent.ContentUpdated(ref.messageId, parent))
+        updateHeader()
+    }
+
+    @RequiresEdt
+    fun removeChildTool(child: String, partId: String) {
+        childRemoved.getOrPut(child) { mutableSetOf() }.add(partId)
+        val ref = childRefs[child] ?: return
+        val tools = childTools[child] ?: return
+        if (tools.remove(partId) == null) return
+        val msg = entries[ref.messageId] ?: return
+        val parent = msg.parts[ref.partId] as? Tool ?: return
+        parent.childTools = tools.values.toList()
+        fire(SessionModelEvent.ContentUpdated(ref.messageId, parent))
         updateHeader()
     }
 
@@ -221,8 +327,47 @@ class SessionModel {
         if (this.session == session) return
         this.session = session
         fire(SessionModelEvent.SessionUpdated(session))
+        setRevert(session.revert)
         updateHeader()
     }
+
+    @RequiresEdt
+    fun setRevert(revert: SessionRevertDto?) {
+        if (this.revert == revert) return
+        this.revert = revert
+        fire(SessionModelEvent.RevertChanged(revert))
+    }
+
+    @RequiresEdt
+    fun setQueued(ids: Set<String>) {
+        val next = ids - terminals.keys
+        if (queued == next) return
+        queued = next
+        fire(SessionModelEvent.QueueChanged(next))
+    }
+
+    /** A message terminal is authoritative only for that prompt, never for the session state. */
+    @RequiresEdt
+    fun setTerminal(event: ChatEventDto.MessageTerminal) {
+        if (session?.id?.let { it != event.sessionID } == true) return
+        val msg = entries[event.messageID]
+        if (msg != null && (msg.info.role != "user" || msg.info.sessionID != event.sessionID)) return
+        val previous = terminals[event.messageID]
+        if (previous != null) {
+            if (previous != event) LOG.warn("kind=message-terminal contradiction mid=${event.messageID}")
+            return
+        }
+        terminals[event.messageID] = event
+        setQueued(queued - event.messageID)
+        if (msg == null) return
+        val updated = Message(msg.info, event).also { it.parts.putAll(msg.parts) }
+        entries[event.messageID] = updated
+        fire(SessionModelEvent.MessageUpdated(updated))
+    }
+
+    @RequiresEdt
+    private fun terminal(dto: MessageDto) = terminals[dto.id]
+        ?.takeIf { dto.role == "user" && dto.sessionID == it.sessionID }
 
     @RequiresEdt
     fun setDiff(diff: List<DiffFileDto>) {
@@ -235,6 +380,30 @@ class SessionModel {
         this.todos = todos
         fire(SessionModelEvent.TodosUpdated(todos))
         updateHeader()
+    }
+
+    /** Replace the raw background-agent rows (already parent-filtered by the caller) and re-derive [backgroundAgents]. */
+    @RequiresEdt
+    fun setBackgroundAgents(agents: List<BackgroundAgent>) {
+        rawBackgroundAgents = agents
+        applyBackgroundAgents()
+    }
+
+    /** Hide finished background-agent rows locally. A dismissed job that runs again reappears. */
+    @RequiresEdt
+    fun dismissBackgroundAgents(jobs: Set<String>) {
+        if (jobs.isEmpty()) return
+        dismissedBackgroundAgents = dismissedBackgroundAgents + jobs
+        applyBackgroundAgents()
+    }
+
+    private fun applyBackgroundAgents() {
+        val visible = BackgroundAgents.order(
+            rawBackgroundAgents.filter { BackgroundAgents.visible(it, dismissedBackgroundAgents) },
+        )
+        if (visible == backgroundAgents) return
+        backgroundAgents = visible
+        fire(SessionModelEvent.BackgroundAgentsUpdated(visible))
     }
 
     @RequiresEdt
@@ -251,15 +420,28 @@ class SessionModel {
 
     @RequiresEdt
     fun loadHistory(history: List<MessageWithPartsDto>) {
+        val retained = history.associate { it.info.id to it.info }
+        terminals.entries.removeIf { (id, event) ->
+            val info = retained[id]
+            info == null || info.role != "user" || info.sessionID != event.sessionID
+        }
         entries.clear()
+        childRefs.clear()
+        childTools.clear()
+        childRemoved.clear()
         hiddenText.clear()
         session = null
+        revert = null
+        queued = emptySet()
         state = SessionState.Idle
         diff = emptyList()
         todos = emptyList()
+        rawBackgroundAgents = emptyList()
+        dismissedBackgroundAgents = emptySet()
+        backgroundAgents = emptyList()
         compactionCount = 0
         for (msg in history) {
-            val item = Message(msg.info)
+            val item = Message(msg.info, terminal(msg.info))
             for (part in msg.parts) {
                 if (part.type in SILENT_PART_TYPES) continue
                 if (hiddenSynthetic(item, part)) {
@@ -269,6 +451,7 @@ class SessionModel {
                 if (empty(part)) continue
                 val content = fromDto(part, part.text)
                 item.parts[content.id] = content
+                trackChild(msg.info.id, content)
             }
             entries[msg.info.id] = item
         }
@@ -279,13 +462,22 @@ class SessionModel {
 
     @RequiresEdt
     fun clear() {
+        terminals.clear()
         entries.clear()
         turnEntries.clear()
+        childRefs.clear()
+        childTools.clear()
+        childRemoved.clear()
         hiddenText.clear()
         session = null
+        revert = null
+        queued = emptySet()
         state = SessionState.Idle
         diff = emptyList()
         todos = emptyList()
+        rawBackgroundAgents = emptyList()
+        dismissedBackgroundAgents = emptySet()
+        backgroundAgents = emptyList()
         compactionCount = 0
         fire(SessionModelEvent.Cleared)
         updateHeader()
@@ -391,6 +583,7 @@ class SessionModel {
                 val text = dto.text ?: return
                 existing.content.clear()
                 existing.content.append(text)
+                dto.injectedTitle?.let { existing.injectedTitle = it }
             }
             is Reasoning -> {
                 val text = dto.text ?: return
@@ -403,19 +596,31 @@ class SessionModel {
                 existing.url = dto.url ?: ""
                 existing.filename = dto.filename
                 existing.source = dto.source
+                val range = range(existing.url)
+                existing.startLine = range?.first
+                existing.endLine = range?.last
             }
             is Tool -> {
+                val old = existing.childSessionId
                 existing.kind = toolKind(dto.tool)
                 existing.state = parseToolState(dto.state)
                 existing.callId = dto.callID
                 existing.title = dto.title
                 existing.input = dto.input
                 existing.metadata = dto.metadata
+                existing.approval = dto.approval?.toModel()
+                existing.childSessionId = childID(existing)
+                if (old != null && old != existing.childSessionId) {
+                    childRefs.remove(old)
+                    childTools.remove(old)
+                    childRemoved.remove(old)
+                }
                 existing.output = dto.output
                 existing.error = dto.error
                 existing.time = dto.time
                 existing.todos = dto.todos
                 existing.todoView = dto.todoView
+                trackChild(messageId, existing)
             }
             is Compaction -> return
             is StepFinish -> {
@@ -423,6 +628,7 @@ class SessionModel {
                 existing.cost = dto.cost
                 existing.tokens = dto.tokens
             }
+            is Notice -> return
             is Generic -> return
         }
         fire(SessionModelEvent.ContentUpdated(messageId, existing))
@@ -432,13 +638,26 @@ class SessionModel {
     private fun empty(dto: PartDto) = dto.type == "text" && dto.text?.isNotBlank() != true
 
     private fun hiddenSynthetic(msg: Message, dto: PartDto) =
-        msg.info.role == "user" && dto.type == "text" && dto.synthetic == true
+        msg.info.role == "user" && dto.type == "text" && dto.synthetic == true && notice(dto) == null
+
+    /** Recognizes the CLI's synthetic "could not read attachment" text and turns it into a [Notice]. */
+    private fun notice(dto: PartDto): Notice? {
+        if (dto.type != "text" || dto.synthetic != true) return null
+        val text = dto.text ?: return null
+        if (!text.startsWith(READ_FAILED)) return null
+        val end = text.indexOf(READ_FAILED_ERROR, READ_FAILED.length)
+        if (end < 0) return null
+        val path = text.substring(READ_FAILED.length, end).takeIf { it.isNotBlank() }
+        val name = path?.substringAfterLast('/')?.substringAfterLast('\\')?.takeIf { it.isNotBlank() }
+        return Notice(dto.id, Notice.ATTACHMENT_READ_FAILED, name, path)
+    }
 
     private fun fromDto(dto: PartDto, text: CharSequence? = null): Content {
         val content = text ?: dto.text
         return when (dto.type) {
-            "text" -> Text(dto.id).apply {
+            "text" -> notice(dto) ?: Text(dto.id).apply {
                 if (content != null && content.isNotEmpty()) this.content.append(content)
+                injectedTitle = dto.injectedTitle
             }
             "reasoning" -> Reasoning(dto.id).apply {
                 if (content != null && content.isNotEmpty()) this.content.append(content)
@@ -449,13 +668,19 @@ class SessionModel {
                 url = dto.url ?: ""
                 filename = dto.filename
                 source = dto.source
+                val range = range(url)
+                startLine = range?.first
+                endLine = range?.last
             }
             "tool" -> Tool(dto.id, dto.tool ?: "unknown", toolKind(dto.tool)).apply {
+                messageID = dto.messageID
                 state = parseToolState(dto.state)
                 callId = dto.callID
                 title = dto.title
                 input = dto.input
                 metadata = dto.metadata
+                approval = dto.approval?.toModel()
+                childSessionId = childID(this)
                 output = dto.output
                 error = dto.error
                 time = dto.time
@@ -474,6 +699,35 @@ class SessionModel {
 
     private fun fire(event: SessionModelEvent) {
         for (l in listeners) l.onEvent(event)
+    }
+
+    private fun range(url: String): IntRange? {
+        val query = runCatching { java.net.URI.create(url).rawQuery }.getOrNull() ?: return null
+        val args = query.split('&')
+            .mapNotNull {
+                val index = it.indexOf('=')
+                if (index < 0) return@mapNotNull null
+                it.substring(0, index) to it.substring(index + 1)
+            }
+            .toMap()
+        val start = args["start"]?.toIntOrNull()?.takeIf { it > 0 } ?: return null
+        val end = args["end"]?.toIntOrNull()?.takeIf { it >= start } ?: start
+        return start..end
+    }
+
+    private fun trackChild(messageId: String, content: Content) {
+        val tool = content as? Tool ?: return
+        val child = tool.childSessionId ?: return
+        childRefs[child] = ChildRef(messageId, tool.id)
+        tool.childTools = childTools[child]?.values?.toList() ?: emptyList()
+    }
+
+    private fun untrackChild(content: Content) {
+        val tool = content as? Tool ?: return
+        val child = tool.childSessionId ?: return
+        childRefs.remove(child)
+        childTools.remove(child)
+        childRemoved.remove(child)
     }
 
     private fun updateHeader() {
@@ -517,17 +771,35 @@ class SessionModel {
     private fun timeline(items: List<Message>): List<TimelineItem> = items
         .filter { it.info.role == "assistant" }
         .flatMap { msg ->
-            msg.parts.values.map { part ->
+            // Adjacent reasoning parts render through a single ReasoningView (see MessageView's
+            // aliases map), so they get a single bar. One bar per part would put several bars on the
+            // same block: clicking the second and later ones would jump nowhere new, which reads as a
+            // dead bar.
+            runs(msg.parts.values.toList()).map { run ->
+                val head = run.first()
                 TimelineItem(
-                    id = "${msg.info.id}/${part.id}",
-                    part = part,
-                    title = part.timelineTitle(),
-                    weight = part.weight().coerceIn(1, 10),
-                    durationMs = (part as? Tool)?.time?.durationMs(),
-                    active = (part as? Tool)?.state == ToolExecState.RUNNING || part is Reasoning && !part.done,
+                    message = msg.info.id,
+                    part = head,
+                    title = head.timelineTitle(),
+                    weight = run.sumOf { it.weight() }.coerceIn(1, 10),
+                    durationMs = (head as? Tool)?.time?.durationMs(),
+                    active = run.any {
+                        (it as? Tool)?.state == ToolExecState.RUNNING || it is Reasoning && !it.done
+                    },
                 )
             }
         }
+
+    /** Groups each stretch of adjacent reasoning parts together; every other part stands alone. */
+    private fun runs(parts: List<Content>): List<List<Content>> {
+        val result = mutableListOf<MutableList<Content>>()
+        for (part in parts) {
+            val last = result.lastOrNull()
+            if (part is Reasoning && last != null && last.last() is Reasoning) last.add(part)
+            else result.add(mutableListOf(part))
+        }
+        return result
+    }
 
     private fun item(key: String): ModelItem? = models.firstOrNull { it.key == key }
 
@@ -594,6 +866,13 @@ private fun parseToolState(raw: String?): ToolExecState = when (raw) {
     else -> ToolExecState.PENDING
 }
 
+private data class ChildRef(val messageId: String, val partId: String)
+
+private fun childID(tool: Tool): String? {
+    if (tool.name != "task") return null
+    return tool.metadata["sessionId"]
+}
+
 data class AgentItem(
     val name: String,
     val display: String,
@@ -606,11 +885,22 @@ data class ModelItem(
     val display: String,
     val provider: String,
     val providerName: String,
+    val inputPrice: Double? = null,
+    val outputPrice: Double? = null,
+    val contextLength: Long? = null,
+    val releaseDate: String? = null,
+    val latest: Boolean? = null,
     val recommendedIndex: Double?,
     val free: Boolean,
     val byok: Boolean = false,
     val variants: List<String>,
     val limit: ModelLimitItem?,
+    val cost: ModelCostDto? = null,
+    val capabilities: ModelCapabilitiesDto? = null,
+    val options: ModelOptionsDto? = null,
+    val autoRouting: ModelAutoRoutingDto? = null,
+    val terminalBench: ModelTerminalBenchDto? = null,
+    val reasoning: Boolean = false,
     val attachment: Boolean = false,
     val mayTrainOnYourPrompts: Boolean = false,
 ) {
@@ -651,6 +941,7 @@ private fun Content.timelineTitle(): String = when (this) {
     is Tool -> fileActionTitle() ?: title?.takeIf { it.isNotBlank() } ?: name
     is Compaction -> "Compaction"
     is StepFinish -> "Step finish"
+    is Notice -> "Notice"
     is Generic -> type
 }
 
@@ -685,6 +976,7 @@ private fun Content.weight(): Int = when (this) {
     is Tool -> listOf(input.size, output?.length?.div(400) ?: 0, error?.length?.div(200) ?: 0).sum() + 1
     is Compaction -> 2
     is StepFinish -> tokens?.stepWeight() ?: 1
+    is Notice -> 1
     is Generic -> 1
 }
 
@@ -712,6 +1004,7 @@ private fun renderMessage(msg: Message): List<String> {
             is Tool -> out.add(renderTool(part))
             is Compaction -> out.add("compaction#${part.id}")
             is StepFinish -> out.add("step-finish#${part.id}")
+            is Notice -> out.add("notice#${part.id} ${part.kind} ${part.name ?: ""}".trimEnd())
             is Generic -> out.add("${part.type}#${part.id}")
         }
     }
@@ -770,6 +1063,16 @@ private fun renderTool(tool: Tool): String {
     ).filterNotNull().joinToString("")
     return "tool#${tool.id} ${tool.name} [$state]$title$data"
 }
+
+private fun ToolApprovalDto.toModel() = ToolApproval(
+    source = source,
+    agent = agent,
+    rulePermission = rulePermission,
+    rulePattern = rulePattern,
+    ruleAction = ruleAction,
+    outsideWorkspace = outsideWorkspace,
+    outsideWorkspacePath = outsideWorkspacePath,
+)
 
 private fun renderMap(map: Map<String, String>): String =
     map.entries.sortedBy { it.key }.joinToString(",", "{", "}") { "${it.key}=${it.value}" }

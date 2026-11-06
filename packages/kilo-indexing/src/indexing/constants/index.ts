@@ -35,6 +35,8 @@ export const DEFAULT_MAX_SEARCH_RESULTS = CODEBASE_INDEX_DEFAULTS.DEFAULT_SEARCH
 /**File Watcher */
 export const QDRANT_CODE_BLOCK_NAMESPACE = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 export const MAX_FILE_SIZE_BYTES = 1 * 1024 * 1024 // 1MB
+// Defensive bound on establishing the native file-watcher subscription.
+export const PARCEL_SUBSCRIBE_TIMEOUT_MS = 10_000
 
 /**Directory Scanner */
 export const MAX_LIST_FILES_LIMIT_CODE_INDEX = 50_000
@@ -44,13 +46,23 @@ export const INITIAL_RETRY_DELAY_MS = 500
 export const PARSING_CONCURRENCY = 10
 export const MAX_PENDING_BATCHES = 20 // Maximum number of batches to accumulate before waiting
 
+/**LanceDB maintenance */
+// Compact after this many modification operations (each upsert is a delete+add,
+// so this fires roughly every 20 upserts). LanceDB recommends optimizing after
+// ~20 modifications; keeping the backlog small avoids heavy compactions.
+export const LANCEDB_COMPACT_EVERY_WRITES = 40
+// Grace period before old versions may be pruned. Pruning with a zero-length
+// window (new Date()) installs an auto-cleanup that races concurrent writers and
+// logs "manifest not found"; keep recent versions available for active readers.
+export const LANCEDB_CLEANUP_RETENTION_MS = 10 * 60_000
+
 /**Manager Recovery */
 export const MAX_MANAGER_RECOVERY_ATTEMPTS = 3
 export const INITIAL_MANAGER_RECOVERY_DELAY_MS = 500
 
 /**Embedder Validation */
 export const REMOTE_EMBEDDER_VALIDATION_TIMEOUT_MS = 15_000
-export const REMOTE_EMBEDDER_VALIDATION_MAX_RETRIES = 0
+export const REMOTE_EMBEDDER_VALIDATION_MAX_RETRIES = 2
 export const OLLAMA_EMBEDDER_REQUEST_TIMEOUT_MS = 120_000
 
 /**OpenAI Embedder */

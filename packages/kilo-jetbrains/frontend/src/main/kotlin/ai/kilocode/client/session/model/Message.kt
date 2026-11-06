@@ -1,6 +1,7 @@
 package ai.kilocode.client.session.model
 
 import ai.kilocode.rpc.dto.MessageDto
+import ai.kilocode.rpc.dto.ChatEventDto
 import ai.kilocode.rpc.dto.PartSourceDto
 import ai.kilocode.rpc.dto.PartTimeDto
 import ai.kilocode.rpc.dto.TodoDto
@@ -26,7 +27,7 @@ data class ContextUsage(
 )
 
 data class TimelineItem(
-    val id: String,
+    val message: String,
     val part: Content,
     val title: String,
     val weight: Int,
@@ -49,6 +50,7 @@ data class ModelLimitItem(
 /** A single message with its typed contents. */
 class Message(
     val info: MessageDto,
+    val terminal: ChatEventDto.MessageTerminal? = null,
 ) {
     val parts = LinkedHashMap<String, Content>()
 }
@@ -59,6 +61,22 @@ sealed class Content(val id: String)
 /** Streamed text content from the assistant. */
 class Text(id: String) : Content(id) {
     val content = StringBuilder()
+    /** Set when Kilo composed this prompt, e.g. "Update from main". */
+    var injectedTitle: String? = null
+}
+
+/**
+ * A non-error informational note rendered inline in the transcript, e.g. an attachment the server
+ * could not read. Derived from a persisted synthetic user text part, so it survives a reload like
+ * any other part.
+ *
+ * [path] is the full source path the CLI reported, kept so the attachment can be rebuilt when the
+ * message is reverted back into the prompt; [name] is just its file name for display.
+ */
+class Notice(id: String, val kind: String, val name: String?, val path: String? = null) : Content(id) {
+    companion object {
+        const val ATTACHMENT_READ_FAILED = "attachment_read_failed"
+    }
 }
 
 /** Model reasoning / chain-of-thought. */
@@ -73,21 +91,38 @@ class FileAttachment(id: String) : Content(id) {
     var url: String = ""
     var filename: String? = null
     var source: PartSourceDto? = null
+    var startLine: Int? = null
+    var endLine: Int? = null
 }
 
 /** Tool invocation with lifecycle state. */
 class Tool(id: String, val name: String, var kind: ToolKind) : Content(id) {
+    /** Owning message id. The CLI scopes authoritative snapshot diffs by message, not part, id. */
+    var messageID: String? = null
     var state: ToolExecState = ToolExecState.PENDING
     var callId: String? = null
     var title: String? = null
     var input: Map<String, String> = emptyMap()
     var metadata: Map<String, String> = emptyMap()
+    var approval: ToolApproval? = null
+    var childSessionId: String? = null
+    var childTools: List<Tool> = emptyList()
     var output: String? = null
     var error: String? = null
     var time: PartTimeDto? = null
     var todos: List<TodoDto> = emptyList()
     var todoView: TodoViewDto? = null
 }
+
+data class ToolApproval(
+    val source: String,
+    val agent: String? = null,
+    val rulePermission: String? = null,
+    val rulePattern: String? = null,
+    val ruleAction: String? = null,
+    val outsideWorkspace: Boolean = false,
+    val outsideWorkspacePath: String? = null,
+)
 
 /** Context compaction marker. */
 class Compaction(id: String) : Content(id)
@@ -109,7 +144,7 @@ enum class ToolExecState { PENDING, RUNNING, COMPLETED, ERROR }
 
 enum class ToolKind { READ, WRITE, GENERIC }
 
-private val READ_TOOLS = setOf("read", "glob", "grep", "find", "ls", "diagnostics", "warpgrep")
+private val READ_TOOLS = setOf("read", "glob", "grep", "find", "ls", "diagnostics")
 private val WRITE_TOOLS = setOf("edit", "write", "patch", "multi_edit", "multiedit", "apply_patch")
 
 fun toolKind(name: String?): ToolKind = when (name?.lowercase()) {

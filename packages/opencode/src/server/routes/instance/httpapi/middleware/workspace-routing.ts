@@ -1,4 +1,4 @@
-import { WorkspaceID } from "@/control-plane/schema"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import type { Target } from "@/control-plane/types"
 import { Workspace } from "@/control-plane/workspace"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
@@ -6,6 +6,8 @@ import { Session } from "@/session/session"
 import { HttpApiProxy } from "./proxy"
 import * as Fence from "@/server/shared/fence"
 import { getWorkspaceRouteSessionID, isLocalWorkspaceRoute, workspaceProxyURL } from "@/server/shared/workspace-routing"
+import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - fork honors explicit target directory
+import { HostedRouting, type Routed } from "@/kilocode/server/routes/hosted-routing" // kilocode_change - opaque hosted attachments
 import { NotFoundError } from "@/storage/storage"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Context, Data, Effect, Layer, Option, Schema } from "effect"
@@ -30,14 +32,20 @@ type RemoteTarget = Extract<Target, { type: "remote" }>
 
 type RequestPlan = Data.TaggedEnum<{
   InvalidWorkspace: {}
-  MissingWorkspace: { readonly workspaceID: WorkspaceID }
-  Local: { readonly directory: string; readonly workspaceID?: WorkspaceID }
+  MissingWorkspace: { readonly workspaceID: WorkspaceV2.ID }
+  Local: { readonly directory: string; readonly workspaceID?: WorkspaceV2.ID }
   Remote: {
     readonly request: HttpServerRequest.HttpServerRequest
     readonly workspace: Workspace.Info
     readonly target: RemoteTarget
     readonly url: URL
   }
+  // kilocode_change start - opaque hosted attachment
+  Hosted: {
+    readonly plan: Routed
+    readonly request: HttpServerRequest.HttpServerRequest
+  }
+  // kilocode_change end
 }>
 const RequestPlan = Data.taggedEnum<RequestPlan>()
 const InvalidWorkspaceID = Symbol("InvalidWorkspaceID")
@@ -46,7 +54,7 @@ export class WorkspaceRouteContext extends Context.Service<
   WorkspaceRouteContext,
   {
     readonly directory: string
-    readonly workspaceID?: WorkspaceID
+    readonly workspaceID?: WorkspaceV2.ID
   }
 >()("@opencode/ExperimentalHttpApiWorkspaceRouteContext") {}
 
@@ -62,23 +70,23 @@ function requestURL(request: HttpServerRequest.HttpServerRequest): URL {
   return new URL(request.url, "http://localhost")
 }
 
-function configuredWorkspaceID(): WorkspaceID | undefined {
-  return Flag.KILO_WORKSPACE_ID ? WorkspaceID.make(Flag.KILO_WORKSPACE_ID) : undefined
+function configuredWorkspaceID(): WorkspaceV2.ID | undefined {
+  return Flag.KILO_WORKSPACE_ID ? WorkspaceV2.ID.make(Flag.KILO_WORKSPACE_ID) : undefined
 }
 
-function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceID): WorkspaceID | undefined {
+function selectedWorkspaceID(url: URL, sessionWorkspaceID?: WorkspaceV2.ID): WorkspaceV2.ID | undefined {
   const workspaceParam = url.searchParams.get("workspace")
-  return sessionWorkspaceID ?? (workspaceParam ? WorkspaceID.make(workspaceParam) : undefined)
+  return sessionWorkspaceID ?? (workspaceParam ? WorkspaceV2.ID.make(workspaceParam) : undefined)
 }
 
 function selectedV2WorkspaceID(
   url: URL,
-  sessionWorkspaceID?: WorkspaceID,
-): WorkspaceID | typeof InvalidWorkspaceID | undefined {
+  sessionWorkspaceID?: WorkspaceV2.ID,
+): WorkspaceV2.ID | typeof InvalidWorkspaceID | undefined {
   if (sessionWorkspaceID) return sessionWorkspaceID
   const workspaceParam = url.searchParams.get("workspace")
   if (!workspaceParam) return undefined
-  const workspaceID = Schema.decodeUnknownOption(WorkspaceID)(workspaceParam)
+  const workspaceID = Schema.decodeUnknownOption(WorkspaceV2.ID)(workspaceParam)
   if (Option.isNone(workspaceID)) return InvalidWorkspaceID
   return workspaceID.value
 }
@@ -92,14 +100,14 @@ function shouldStayOnControlPlane(request: HttpServerRequest.HttpServerRequest, 
 }
 
 function resolveWorkspace(
-  id: WorkspaceID | undefined,
-  envWorkspaceID: WorkspaceID | undefined,
+  id: WorkspaceV2.ID | undefined,
+  envWorkspaceID: WorkspaceV2.ID | undefined,
 ): Effect.Effect<Workspace.Info | void, never, Workspace.Service> {
   if (!id || envWorkspaceID) return Effect.void
   return Workspace.Service.use((workspace) => workspace.get(id))
 }
 
-function missingWorkspaceResponse(id: WorkspaceID): HttpServerResponse.HttpServerResponse {
+function missingWorkspaceResponse(id: WorkspaceV2.ID): HttpServerResponse.HttpServerResponse {
   return HttpServerResponse.text(`Workspace not found: ${id}`, {
     status: 500,
     contentType: "text/plain; charset=utf-8",
@@ -163,6 +171,13 @@ function planRequest(
 ): Effect.Effect<RequestPlan, never, Workspace.Service> {
   return Effect.gen(function* () {
     const url = requestURL(request)
+    // kilocode_change start - an opaque hosted attachment takes precedence over Workspace lookup and local/forward classification
+    const hosted = yield* HostedRouting.resolve(request, url)
+    if (hosted) {
+      if (hosted.type === "local") return RequestPlan.Local({ directory: hosted.directory })
+      return RequestPlan.Hosted({ plan: hosted, request })
+    }
+    // kilocode_change end
     const envWorkspaceID = configuredWorkspaceID()
     const workspaceID = url.pathname.startsWith("/api/")
       ? selectedV2WorkspaceID(url, session?.workspaceID)
@@ -178,10 +193,13 @@ function planRequest(
       return yield* planWorkspaceRequest(request, url, workspace)
     }
 
+    // kilocode_change start - a fork targeting an explicit directory (e.g. a worktree) must not inherit the source session's directory
+    const forkDirectory = forkTargetDirectory(request.method, url, request.headers as Record<string, string | undefined>)
     return RequestPlan.Local({
-      directory: session?.directory || defaultDirectory(request, url),
+      directory: forkDirectory || session?.directory || defaultDirectory(request, url),
       workspaceID: envWorkspaceID ?? workspaceID,
     })
+    // kilocode_change end
   })
 }
 
@@ -204,6 +222,7 @@ function routeWorkspace<E>(
       ),
     MissingWorkspace: ({ workspaceID }) => Effect.succeed(missingWorkspaceResponse(workspaceID)),
     Remote: ({ request, workspace, target, url }) => proxyRemote(client, request, workspace, target, url),
+    Hosted: ({ plan, request }) => HostedRouting.respond(plan, request), // kilocode_change - opaque hosted attachment
     Local: ({ directory, workspaceID }) =>
       effect.pipe(Effect.provideService(WorkspaceRouteContext, WorkspaceRouteContext.of({ directory, workspaceID }))),
   })
