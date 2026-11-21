@@ -1,11 +1,12 @@
 import { z } from "zod"
 import { getKiloUrlFromToken } from "../auth/token.js"
 import { getDefaultHeaders, buildKiloHeaders } from "../headers.js"
-import { KILO_API_BASE, KILO_OPENROUTER_BASE, MODELS_FETCH_TIMEOUT_MS, PROMPTS, AI_SDK_PROVIDERS } from "./constants.js"
+import { resolveKiloGatewayBaseUrl, resolveKiloGatewayUrl } from "./url.js"
+import { KILO_OPENROUTER_BASE, MODELS_FETCH_TIMEOUT_MS, PROMPTS, AI_SDK_PROVIDERS } from "./constants.js"
 
 export type KiloModelsResult = {
   models: Record<string, any>
-  error?: { kind: "unauthorized" | "network" | "schema" | "http"; status?: number }
+  error?: { kind: "unauthorized" | "network" | "schema" | "http"; status?: number; retryAfter?: number }
 }
 
 /**
@@ -38,6 +39,12 @@ const openRouterModelSchema = z.object({
   isFree: z.boolean().optional(),
   mayTrainOnYourPrompts: z.boolean().optional(),
   hasUserByokAvailable: z.boolean().optional(),
+  autoRouting: z
+    .object({
+      models: z.array(z.string()),
+    })
+    .optional()
+    .catch(undefined),
   terminalBench: z
     .object({
       overallScore: z.number(),
@@ -50,6 +57,7 @@ const openRouterModelSchema = z.object({
       family: z.string().optional(),
       prompt: z.enum(PROMPTS).optional().catch(undefined),
       variants: z.record(z.string(), z.record(z.string(), z.any())).optional(),
+      reasoning_options: z.array(z.unknown()).optional().catch(undefined),
       ai_sdk_provider: z.enum(AI_SDK_PROVIDERS).optional().catch(undefined),
     })
     .optional(),
@@ -69,7 +77,7 @@ type OpenRouterModel = z.infer<typeof openRouterModelSchema>
 function parseApiPrice(price: string | null | undefined): number | undefined {
   if (!price) return undefined
   const parsed = parseFloat(price)
-  if (isNaN(parsed)) return undefined
+  if (isNaN(parsed) || parsed < 0) return undefined
   return parsed * 1_000_000 // Convert $/token → $/M tokens
 }
 
@@ -84,11 +92,131 @@ export async function fetchKiloModels(options?: {
   kilocodeOrganizationId?: string
   baseURL?: string
 }): Promise<KiloModelsResult> {
+  const raw = await fetchRawKiloModels(options)
+  if (raw.error) return { models: {}, error: raw.error }
+
+  // Transform models to ModelsDev.Model format
+  const models: Record<string, any> = {}
+
+  for (const model of raw.data) {
+    // Skip models that explicitly don't support tools — Kilo requires tool calling
+    if (!supportsTools(model)) continue
+
+    const transformedModel = transformToModelDevFormat(model)
+    models[model.id] = transformedModel
+  }
+
+  return { models }
+}
+
+export type KiloImageModel = {
+  id: string
+  name: string
+  description?: string
+}
+
+export type KiloImageModelsResult = {
+  models: KiloImageModel[]
+  error?: { kind: "unauthorized" | "network" | "schema" | "http"; status?: number }
+}
+
+export type KiloTranscriptionModel = {
+  id: string
+  name: string
+}
+
+export type KiloTranscriptionModelsResult = {
+  models: KiloTranscriptionModel[]
+  error?: { kind: "unauthorized" | "network" | "schema" | "http"; status?: number }
+}
+
+/**
+ * Fetch image-capable models from Kilo API (OpenRouter-compatible endpoint).
+ * Uses the same raw fetch as {@link fetchKiloModels} but keeps only models
+ * whose `output_modalities` include `"image"`.
+ */
+export async function fetchKiloImageModels(options?: {
+  kilocodeToken?: string
+  kilocodeOrganizationId?: string
+  baseURL?: string
+}): Promise<KiloImageModelsResult> {
+  const raw = await fetchRawKiloModels(options)
+  if (raw.error) return { models: [], error: raw.error }
+
+  const models: KiloImageModel[] = []
+
+  for (const model of raw.data) {
+    if (model.architecture?.output_modalities?.includes("image")) {
+      models.push({ id: model.id, name: model.name, description: model.description })
+    }
+  }
+
+  return { models }
+}
+
+export async function fetchKiloTranscriptionModels(options?: {
+  kilocodeToken?: string
+  kilocodeOrganizationId?: string
+  baseURL?: string
+}): Promise<KiloTranscriptionModelsResult> {
+  const token = options?.kilocodeToken
+  const organizationId = options?.kilocodeOrganizationId
+  const url = new URL("transcription-models", resolveKiloGatewayBaseUrl({ baseURL: options?.baseURL, token }))
+  const response = await fetch(url, {
+    headers: {
+      ...getDefaultHeaders(),
+      ...buildKiloHeaders(undefined, { kilocodeOrganizationId: organizationId }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal: AbortSignal.timeout(MODELS_FETCH_TIMEOUT_MS),
+  }).catch((err: unknown) => err as Error)
+
+  if (response instanceof Error) return { models: [], error: { kind: "network" } }
+  if (!response.ok) {
+    const kind = response.status === 401 || response.status === 403 ? "unauthorized" : "http"
+    return { models: [], error: { kind, status: response.status } }
+  }
+
+  const json = await response.json().catch(() => null)
+  if (!json || !Array.isArray(json.data)) return { models: [], error: { kind: "schema" } }
+
+  const data: unknown[] = json.data
+  const models = data.filter(isTranscriptionModel).map((model) => ({
+    id: model.id,
+    name: model.name,
+  }))
+  if (models.length === 0) return { models: [], error: { kind: "schema" } }
+  return { models }
+}
+
+type TranscriptionModelResponse = {
+  id: string
+  name: string
+}
+
+function isTranscriptionModel(value: unknown): value is TranscriptionModelResponse {
+  if (!value || typeof value !== "object") return false
+  const model = value as Record<string, unknown>
+  return typeof model.id === "string" && typeof model.name === "string"
+}
+
+/**
+ * Shared raw fetch + validate used by both {@link fetchKiloModels} and {@link fetchKiloImageModels}.
+ */
+async function fetchRawKiloModels(options?: {
+  kilocodeToken?: string
+  kilocodeOrganizationId?: string
+  baseURL?: string
+}): Promise<
+  { data: OpenRouterModel[]; error?: undefined } | { data?: undefined; error: NonNullable<KiloModelsResult["error"]> }
+> {
   const token = options?.kilocodeToken
   const organizationId = options?.kilocodeOrganizationId
 
   // Construct base URL
-  const defaultBaseURL = organizationId ? `${KILO_API_BASE}/api/organizations/${organizationId}` : KILO_OPENROUTER_BASE
+  const defaultBaseURL = organizationId
+    ? resolveKiloGatewayUrl(`organizations/${organizationId}`)
+    : KILO_OPENROUTER_BASE
 
   const baseURL = options?.baseURL ?? defaultBaseURL
 
@@ -108,50 +236,46 @@ export async function fetchKiloModels(options?: {
   }).catch((err: unknown) => err as Error)
 
   if (response instanceof Error) {
-    return { models: {}, error: { kind: "network" } }
+    return { error: { kind: "network" } }
   }
 
   if (!response.ok) {
-    // 401 with auth credentials: fall back to unauthenticated public endpoint
-    if (response.status === 401 && (token || organizationId)) {
-      return fetchKiloModels({})
+    if (response.status === 401 && token && !organizationId && !finalBaseURL.includes("/organizations/")) {
+      return fetchRawKiloModels({})
     }
     const kind = response.status === 401 || response.status === 403 ? "unauthorized" : "http"
-    return { models: {}, error: { kind, status: response.status } }
+    const header = response.headers.get("retry-after")
+    const seconds =
+      header == null ? NaN : /^\d+$/.test(header) ? Number(header) : (Date.parse(header) - Date.now()) / 1000
+    const retryAfter = Number.isFinite(seconds) ? Math.max(0, seconds) : undefined
+    return { error: { kind, status: response.status, ...(retryAfter == null ? {} : { retryAfter }) } }
   }
 
   const json = await response.json().catch(() => null)
 
   if (json === null) {
-    return { models: {}, error: { kind: "schema" } }
+    return { error: { kind: "schema" } }
   }
 
   // Validate response schema
   const result = openRouterModelsResponseSchema.safeParse(json)
 
   if (!result.success) {
-    return { models: {}, error: { kind: "schema" } }
+    return { error: { kind: "schema" } }
   }
 
-  // Transform models to ModelsDev.Model format
-  const models: Record<string, any> = {}
+  return { data: result.data.data }
+}
 
-  for (const model of result.data.data) {
-    // Skip image generation models
-    if (model.architecture?.output_modalities?.includes("image")) {
-      continue
-    }
-
-    // Skip models that don't support tools — Kilo requires tool calling
-    if (!model.supported_parameters?.includes("tools")) {
-      continue
-    }
-
-    const transformedModel = transformToModelDevFormat(model)
-    models[model.id] = transformedModel
-  }
-
-  return { models }
+/**
+ * Kilo requires tool calling, so models that explicitly omit "tools" are hidden.
+ * Optimistically assume models with a missing or empty supported_parameters list
+ * support tools (e.g. routers like typesafe/jev-router report an empty list).
+ */
+export function supportsTools(model: { supported_parameters?: string[] }): boolean {
+  const params = model.supported_parameters
+  if (!params || params.length === 0) return true
+  return params.includes("tools")
 }
 
 /**
@@ -170,7 +294,7 @@ function transformToModelDevFormat(model: OpenRouterModel): any {
 
   // Determine capabilities
   const supportsImages = inputModalities.includes("image")
-  const supportsTools = supportedParameters.includes("tools")
+  const tools = supportsTools(model)
   const supportsReasoning = supportedParameters.includes("reasoning")
   const supportsTemperature = supportedParameters.includes("temperature")
 
@@ -187,13 +311,18 @@ function transformToModelDevFormat(model: OpenRouterModel): any {
     reasoning: supportsReasoning,
     temperature: supportsTemperature,
     recommendedIndex: model.preferredIndex,
-    variants: model.opencode?.variants,
+    // The gateway's `variants` are legacy; they only apply when `reasoning_options` is absent
+    // (e.g. admin-authored custom LLM variants).
+    variants: model.opencode?.reasoning_options
+      ? legacyVariants(model.opencode.reasoning_options, model.opencode.ai_sdk_provider)
+      : model.opencode?.variants,
     prompt: model.opencode?.prompt,
     ai_sdk_provider: model.opencode?.ai_sdk_provider,
-    tool_call: supportsTools,
+    tool_call: tools,
     isFree: model.isFree,
     mayTrainOnYourPrompts: model.mayTrainOnYourPrompts,
     hasUserByokAvailable: model.hasUserByokAvailable,
+    ...(model.autoRouting && { autoRouting: model.autoRouting }),
     ...(model.terminalBench && { terminalBench: model.terminalBench }),
     ...(inputPrice !== undefined &&
       outputPrice !== undefined && {
@@ -218,6 +347,63 @@ function transformToModelDevFormat(model: OpenRouterModel): any {
       ...(model.description && { description: model.description }),
     },
   }
+}
+
+// Mirrors `ReasoningEffortSchema` and `VerbositySchema` in Kilo-Org/cloud `packages/db/src/schema-types.ts`.
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+const VERBOSITIES = ["low", "medium", "high", "xhigh", "max"]
+
+const reasoningOptionSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("toggle") }),
+  z.object({ type: z.literal("effort"), values: z.array(z.unknown()) }),
+])
+
+/**
+ * Builds the OpenRouter-shaped variants from the gateway's `reasoning_options`, mirroring
+ * `toLegacyVariants` in Kilo-Org/cloud `packages/web-shared/src/lib/ai-gateway/providers/legacy-variants.ts`.
+ * `[]` (reasoning that is always on) keeps a single `thinking` variant, a lone toggle becomes
+ * `instant`/`thinking`, and effort variants of Anthropic models also get the matching `verbosity`,
+ * which the gateway maps to Anthropic's `effort`. Unknown entries (e.g. `budget_tokens`) are dropped
+ * one by one.
+ */
+function legacyVariants(
+  raw: readonly unknown[],
+  aiSdkProvider: NonNullable<OpenRouterModel["opencode"]>["ai_sdk_provider"],
+) {
+  const options = raw.flatMap((entry) => reasoningOptionSchema.safeParse(entry).data ?? [])
+  const toggle = options.some((option) => option.type === "toggle")
+  const efforts = [
+    ...new Set(
+      options.flatMap((option) =>
+        option.type === "effort"
+          ? option.values.filter(
+              (value): value is string => typeof value === "string" && REASONING_EFFORTS.includes(value),
+            )
+          : [],
+      ),
+    ),
+  ]
+  const entries =
+    raw.length === 0
+      ? [["thinking", "high"]]
+      : efforts.length === 0
+        ? toggle
+          ? [
+              ["instant", "none"],
+              ["thinking", "high"],
+            ]
+          : []
+        : [...(toggle && !efforts.includes("none") ? ["none"] : []), ...efforts].map((effort) => [effort, effort])
+  if (entries.length === 0) return undefined
+  return Object.fromEntries(
+    entries.map(([name, effort]) => [
+      name,
+      {
+        reasoning: { enabled: effort !== "none", effort },
+        ...(aiSdkProvider === "anthropic" && name === effort && VERBOSITIES.includes(effort) && { verbosity: effort }),
+      },
+    ]),
+  )
 }
 
 /**

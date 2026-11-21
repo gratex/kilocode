@@ -26,14 +26,18 @@ Major AI companies offering powerful models via API:
 - **[AWS Bedrock](/docs/ai-providers/bedrock)** - AWS-hosted foundation models
 - **[Alibaba Cloud](/docs/ai-providers/alibaba)** - DashScope and Qwen models through Model Studio
 - **[Cloudflare](/docs/ai-providers/cloudflare)** - Workers AI and Cloudflare AI Gateway
+- **[GMI Cloud](/docs/ai-providers/gmicloud)** - OpenAI-compatible inference for open and frontier models
 - **[DeepSeek](/docs/ai-providers/deepseek)** - DeepSeek V3., R1
 - **[Mistral](/docs/ai-providers/mistral)** - Mistral Large, Codestral
+- **[Nebius Token Factory](/docs/ai-providers/nebius)** - Model inference on Nebius infrastructure
+- **[Poolside](/docs/ai-providers/poolside)** - Laguna models
 
 ### Local & Self-Hosted
 
 Run models on your own hardware for privacy and offline use:
 
 - **[Atomic Chat](/docs/ai-providers/atomic-chat)** - Local models with TurboQuant inference and auto-discovery in Kilo Code
+- **[Anaconda Desktop](/docs/ai-providers/anaconda-desktop)** - Discover and connect to a local text-generation model server
 - **[Ollama](/docs/ai-providers/ollama)** - Easy local model management
 - **[LM Studio](/docs/ai-providers/lmstudio)** - Desktop app for local models
 - **[OpenAI Compatible](/docs/ai-providers/openai-compatible)** - Any OpenAI-compatible endpoint
@@ -43,9 +47,11 @@ Run models on your own hardware for privacy and offline use:
 Route requests through unified APIs with additional features:
 
 - **[OpenRouter](/docs/ai-providers/openrouter)** - Access multiple providers through one API
-- **[Glama](/docs/ai-providers/glama)** - Enterprise AI gateway
+- **[TrustedRouter](/docs/ai-providers/trustedrouter)** - OpenAI-compatible access to attested routing, ZDR routing, and E2E encrypted model routes
 - **[Requesty](/docs/ai-providers/requesty)** - Smart routing and fallbacks
+- **[DaoXE](/docs/ai-providers/daoxe)** - Connect multiple model families through one API
 - **[Cloudflare AI Gateway](/docs/ai-providers/cloudflare)** - Route providers through your Cloudflare account
+- **[Eden AI](/docs/ai-providers/edenai)** - EU-based gateway with one key across vendors
 
 ## Choosing a Provider
 
@@ -62,10 +68,6 @@ Route requests through unified APIs with additional features:
 - **Reliability** - Backup options when a provider has outages
 - **Models** - Access exclusive or specialized models
 - **Regional** - Better latency in certain locations
-
-{% callout type="note" %}
-In the **VSCode (Legacy)** version, API keys use VS Code's Secret Storage. In the current **VSCode & CLI** version, keys are set via environment variables or referenced in `kilo.json` config files. See individual provider pages for setup instructions for each platform.
-{% /callout %}
 
 ## Disabling Built-in Providers
 
@@ -88,6 +90,20 @@ To allow only specific providers and disable everything else, use `enabled_provi
 ```
 
 Both fields accept provider IDs — the lowercase identifier used in the `provider/model` format (e.g. `kilo`, `anthropic`, `openai`, `google`, `groq`).
+
+## When a provider fails to load
+
+If Kilo Code cannot fetch a provider's models — for example, because the provider rejected your credentials or its API is unreachable — it keeps the provider visible and shows the reason instead of hiding it. The reason appears wherever you pick a provider: the VS Code provider list and model selector, and the TUI provider picker. In the CLI, the same details are written to the log file; read them with `kilo --print-logs --log-level DEBUG`.
+
+| Reason | What it means |
+|---|---|
+| Credentials rejected | The provider rejected your credentials (for example, HTTP 401). Sign in again to refresh them. |
+| Not signed in | The provider needs a sign-in before its models load. |
+| Couldn't reach the provider | A network error blocked the request. Check your connection and try again. |
+| Provider error | The provider returned an unexpected HTTP status. |
+| Unexpected response | The provider returned data Kilo Code could not read. |
+
+When credentials were rejected, Kilo Code offers to sign in again from the same view.
 
 ## Next Steps
 

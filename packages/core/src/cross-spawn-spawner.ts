@@ -2,6 +2,10 @@ import type * as Arr from "effect/Array"
 import { NodeFileSystem, NodeSink, NodeStream } from "@effect/platform-node"
 import * as NodePath from "@effect/platform-node/NodePath"
 import { prepareCommand as prepareSandbox } from "@kilocode/sandbox" // kilocode_change
+import { release as releaseStdio, tap as tapStdio, tapped } from "./kilocode/stdio-tap" // kilocode_change - Bun drops buffered stdio on close
+import * as SpawnExit from "./kilocode/spawn-exit" // kilocode_change
+import * as SpawnValidation from "./kilocode/spawn-validation" // kilocode_change
+import { settle } from "./kilocode/exit-code" // kilocode_change - settle signal termination as 128 + signum
 import * as Deferred from "effect/Deferred"
 import * as Effect from "effect/Effect"
 import * as Exit from "effect/Exit"
@@ -25,6 +29,8 @@ import {
 import * as NodeChildProcess from "node:child_process"
 import { PassThrough } from "node:stream"
 import launch from "cross-spawn"
+import { makeGlobalNode } from "./effect/app-node"
+import { filesystem, path } from "./effect/app-node-platform"
 
 const toError = (err: unknown): Error => (err instanceof globalThis.Error ? err : new globalThis.Error(String(err)))
 
@@ -93,7 +99,11 @@ const toPlatformError = (
   })
 }
 
-type ExitSignal = Deferred.Deferred<readonly [code: number | null, signal: NodeJS.Signals | null]>
+// kilocode_change start - retain foreground exit independently of ordinary close settlement
+type Status = readonly [code: number | null, signal: NodeJS.Signals | null]
+type ExitSignal = Deferred.Deferred<Status>
+type Spawned = readonly [NodeChildProcess.ChildProcess, ExitSignal, ExitSignal]
+// kilocode_change end
 
 export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
@@ -246,13 +256,13 @@ export const make = Effect.gen(function* () {
   ) => {
     let stdout = proc.stdout
       ? NodeStream.fromReadable({
-          evaluate: () => proc.stdout!,
+          evaluate: () => tapped(proc, "stdout"), // kilocode_change - read the spawn-time tap
           onError: (cause) => toPlatformError("fromReadable(stdout)", toError(cause), command),
         })
       : Stream.empty
     let stderr = proc.stderr
       ? NodeStream.fromReadable({
-          evaluate: () => proc.stderr!,
+          evaluate: () => tapped(proc, "stderr"), // kilocode_change - read the spawn-time tap
           onError: (cause) => toPlatformError("fromReadable(stderr)", toError(cause), command),
         })
       : Stream.empty
@@ -263,25 +273,36 @@ export const make = Effect.gen(function* () {
     return { stdout, stderr, all: Stream.merge(stdout, stderr) }
   }
 
-  const spawn = (command: ChildProcess.StandardCommand, opts: NodeChildProcess.SpawnOptions) =>
-    Effect.callback<readonly [NodeChildProcess.ChildProcess, ExitSignal], PlatformError.PlatformError>((resume) => {
-      const signal = Deferred.makeUnsafe<readonly [code: number | null, signal: NodeJS.Signals | null]>()
+  const spawn = (
+    command: ChildProcess.StandardCommand,
+    opts: NodeChildProcess.SpawnOptions,
+    direct: boolean, // kilocode_change - avoid shadowing settle
+  ) =>
+    Effect.callback<Spawned, PlatformError.PlatformError>((resume) => {
+      // kilocode_change
+      // kilocode_change start
+      const signal = Deferred.makeUnsafe<Status>()
+      const leader = direct ? signal : Deferred.makeUnsafe<Status>()
+      // kilocode_change end
       const proc = launch(command.command, command.args, opts)
+      tapStdio(proc) // kilocode_change - must run in the same tick as spawn
       let end = false
-      let exit: readonly [code: number | null, signal: NodeJS.Signals | null] | undefined
+      let exit: Status | undefined // kilocode_change
       proc.on("error", (err) => {
         resume(Effect.fail(toPlatformError("spawn", err, command)))
       })
       proc.on("exit", (...args) => {
         exit = args
+        Deferred.doneUnsafe(leader, Exit.succeed(args)) // kilocode_change
       })
       proc.on("close", (...args) => {
         if (end) return
         end = true
+        Deferred.doneUnsafe(leader, Exit.succeed(exit ?? args)) // kilocode_change
         Deferred.doneUnsafe(signal, Exit.succeed(exit ?? args))
       })
       proc.on("spawn", () => {
-        resume(Effect.succeed([proc, signal]))
+        resume(Effect.succeed([proc, signal, leader])) // kilocode_change
       })
       return Effect.sync(() => {
         proc.kill("SIGTERM")
@@ -295,10 +316,20 @@ export const make = Effect.gen(function* () {
   ) => {
     if (globalThis.process.platform === "win32") {
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
-        NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
-          if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
-          resume(Effect.void)
+        // kilocode_change start - bound the Windows tree kill itself
+        const child = NodeChildProcess.execFile(
+          "taskkill",
+          ["/pid", String(proc.pid), "/T", "/F"],
+          { windowsHide: true, timeout: 3_000 },
+          (err) => {
+            if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
+            resume(Effect.void)
+          },
+        )
+        return Effect.sync(() => {
+          child.kill()
         })
+        // kilocode_change end
       })
     }
 
@@ -320,26 +351,47 @@ export const make = Effect.gen(function* () {
       return Effect.fail(toPlatformError("kill", new Error("Failed to kill child process"), command))
     })
 
-  const timeout =
-    (
-      proc: NodeChildProcess.ChildProcess,
-      command: ChildProcess.StandardCommand,
-      opts: ChildProcess.KillOptions | undefined,
-    ) =>
-    <A, E, R>(
-      f: (
-        command: ChildProcess.StandardCommand,
-        proc: NodeChildProcess.ChildProcess,
-        signal: NodeJS.Signals,
-      ) => Effect.Effect<A, E, R>,
-    ) => {
-      const signal = opts?.killSignal ?? "SIGTERM"
-      if (Predicate.isUndefined(opts?.forceKillAfter)) return f(command, proc, signal)
-      return Effect.timeoutOrElse(f(command, proc, signal), {
+  // kilocode_change start - termination waits for the foreground process, never inherited pipes
+  const missing = (err: PlatformError.PlatformError) =>
+    err.cause instanceof Error && "code" in err.cause && err.cause.code === "ESRCH"
+
+  const stop = (
+    command: ChildProcess.StandardCommand,
+    proc: NodeChildProcess.ChildProcess,
+    leader: ExitSignal,
+    group: boolean,
+    opts?: ChildProcess.KillOptions,
+  ) => {
+    const wait = Deferred.await(leader).pipe(Effect.asVoid, Effect.interruptible)
+    const send = (sig: NodeJS.Signals) =>
+      Effect.gen(function* () {
+        if (group) return yield* killGroup(command, proc, sig).pipe(Effect.catchIf(missing, () => Effect.void))
+        if (yield* Deferred.isDone(leader)) return undefined
+        const one = killOne(command, proc, sig).pipe(
+          Effect.catch((err) =>
+            wait.pipe(Effect.timeoutOrElse({ duration: "100 millis", orElse: () => Effect.fail(err) })),
+          ),
+        )
+        return yield* process.platform === "win32" ? killGroup(command, proc, sig).pipe(Effect.catch(() => one)) : one
+      }).pipe(Effect.andThen(wait))
+    const attempt = send(opts?.killSignal ?? "SIGTERM")
+    if (!opts?.forceKillAfter) return attempt
+    return attempt.pipe(
+      Effect.timeoutOrElse({
         duration: opts.forceKillAfter,
-        orElse: () => f(command, proc, "SIGKILL"),
-      })
-    }
+        orElse: () =>
+          send("SIGKILL").pipe(
+            Effect.interruptible,
+            Effect.timeoutOrElse({
+              duration: "1 second",
+              orElse: () =>
+                Effect.fail(toPlatformError("kill", new Error("Child process did not exit after SIGKILL"), command)),
+            }),
+          ),
+      }),
+    )
+  }
+  // kilocode_change end
 
   const source = (handle: ChildProcessHandle, from: ChildProcess.PipeFromOption | undefined) => {
     const opt = from ?? "stdout"
@@ -363,6 +415,8 @@ export const make = Effect.gen(function* () {
     function* (command) {
       switch (command._tag) {
         case "StandardCommand": {
+          const validation = SpawnValidation.take(command) // kilocode_change - retain target validation through preparation
+          const direct = SpawnExit.take(command) // kilocode_change - opt selected commands into direct-exit settlement
           const dir = yield* cwd(command.options)
           // kilocode_change start - prepare agent-scoped commands through the selected sandbox backend
           const target = yield* prepareSandbox(command, dir, env(command.options))
@@ -372,40 +426,67 @@ export const make = Effect.gen(function* () {
           const extra = fds(target.options)
           // kilocode_change end
 
-          const [proc, signal] = yield* Effect.acquireRelease(
+          // kilocode_change start - close target-swap races at the raw spawn boundary
+          if (validation)
+            yield* validation.pipe(
+              Effect.mapError((cause) =>
+                PlatformError.systemError({
+                  _tag: "Unknown",
+                  module: "ChildProcess",
+                  method: "validate",
+                  pathOrDescriptor: command.command,
+                  cause,
+                }),
+              ),
+            )
+          // kilocode_change end
+
+          // kilocode_change start - only signal the group created by this spawn
+          const detached = target.options.detached ?? process.platform !== "win32"
+          const group = detached && process.platform !== "win32"
+          const [proc, signal, leader] = yield* Effect.acquireRelease(
+            // kilocode_change end
             // kilocode_change start - spawn the prepared command and options
-            spawn(target, {
-              cwd: dir,
-              env: env(target.options),
-              stdio: stdios(sin, sout, serr, extra),
-              detached: target.options.detached ?? process.platform !== "win32",
-              shell: target.options.shell,
-              // kilocode_change end
-              windowsHide: process.platform === "win32",
-            }),
-            Effect.fnUntraced(function* ([proc, signal]) {
-              const done = yield* Deferred.isDone(signal)
-              const kill = timeout(proc, command, target.options) // kilocode_change
-              if (done) {
+            spawn(
+              target,
+              {
+                cwd: dir,
+                env: env(target.options),
+                stdio: stdios(sin, sout, serr, extra),
+                detached,
+                shell: target.options.shell,
+                // kilocode_change end
+                windowsHide: process.platform === "win32",
+              },
+              direct, // kilocode_change
+            ),
+            // kilocode_change start - release direct-exit commands' owned process group and local pipes
+            ([proc, signal, leader]) => {
+              const release = Effect.gen(function* () {
+                const done = yield* Deferred.isDone(signal)
+                if (!done) yield* stop(command, proc, leader, group, target.options)
+                if (!group) return
+                if (direct) {
+                  // Send only to the isolated group; a child that detached is not ours to kill.
+                  yield* killGroup(command, proc, target.options.killSignal ?? "SIGTERM").pipe(
+                    Effect.andThen(Effect.sleep("100 millis")),
+                    Effect.andThen(killGroup(command, proc, "SIGKILL")),
+                  )
+                  return
+                }
+                if (!done) return
                 const [code] = yield* Deferred.await(signal)
-                if (process.platform === "win32") return yield* Effect.void
-                if (code !== 0 && Predicate.isNotNull(code)) return yield* Effect.ignore(kill(killGroup))
-                return yield* Effect.void
-              }
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              // kilocode_change start - preserve kill options from the prepared command
-              const sig = target.options.killSignal ?? "SIGTERM"
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              const escalated = target.options.forceKillAfter
-                ? Effect.timeoutOrElse(attempt, {
-                    duration: target.options.forceKillAfter,
-                    orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-                  })
-                : attempt
-              // kilocode_change end
-              return yield* Effect.ignore(escalated)
-            }),
+                if (code !== 0 && Predicate.isNotNull(code))
+                  yield* killGroup(command, proc, target.options.killSignal ?? "SIGTERM")
+              }).pipe(
+                Effect.catchIf(missing, () => Effect.void),
+                Effect.catch((err) =>
+                  Effect.logWarning("Could not clean up child process", { pid: proc.pid, reason: err.reason._tag }),
+                ),
+              )
+              return direct ? release.pipe(Effect.ensuring(Effect.sync(() => releaseStdio(proc)))) : release
+            },
+            // kilocode_change end
           )
 
           const fd = yield* setupFds(command, proc, extra)
@@ -420,27 +501,8 @@ export const make = Effect.gen(function* () {
             getInputFd: fd.getInputFd,
             getOutputFd: fd.getOutputFd,
             isRunning: Effect.map(Deferred.isDone(signal), (done) => !done),
-            exitCode: Effect.flatMap(Deferred.await(signal), ([code, signal]) => {
-              if (Predicate.isNotNull(code)) return Effect.succeed(ExitCode(code))
-              return Effect.fail(
-                toPlatformError(
-                  "exitCode",
-                  new Error(`Process interrupted due to receipt of signal: '${signal}'`),
-                  command,
-                ),
-              )
-            }),
-            kill: (opts?: ChildProcess.KillOptions) => {
-              const sig = opts?.killSignal ?? "SIGTERM"
-              const send = (s: NodeJS.Signals) =>
-                Effect.catch(killGroup(command, proc, s), () => killOne(command, proc, s))
-              const attempt = send(sig).pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid)
-              if (!opts?.forceKillAfter) return attempt
-              return Effect.timeoutOrElse(attempt, {
-                duration: opts.forceKillAfter,
-                orElse: () => send("SIGKILL").pipe(Effect.andThen(Deferred.await(signal)), Effect.asVoid),
-              })
-            },
+            exitCode: Effect.flatMap(Deferred.await(signal), settle), // kilocode_change - signal termination settles as 128 + signum
+            kill: (opts) => stop(command, proc, leader, group, opts), // kilocode_change
             unref: Effect.sync(() => {
               if (ref) {
                 proc.unref()
@@ -503,11 +565,11 @@ export const make = Effect.gen(function* () {
   return makeSpawner(spawnCommand)
 })
 
-export const layer: Layer.Layer<ChildProcessSpawner, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
+const layer: Layer.Layer<ChildProcessSpawner, never, FileSystem.FileSystem | Path.Path> = Layer.effect(
   ChildProcessSpawner,
   make,
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(NodeFileSystem.layer), Layer.provide(NodePath.layer))
+export const node = makeGlobalNode({ service: ChildProcessSpawner, layer, deps: [filesystem, path] })
 
 export * as CrossSpawnSpawner from "./cross-spawn-spawner"

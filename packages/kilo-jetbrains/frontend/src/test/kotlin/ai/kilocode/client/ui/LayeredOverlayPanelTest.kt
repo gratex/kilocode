@@ -3,8 +3,16 @@ package ai.kilocode.client.ui
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.util.ui.components.BorderLayoutPanel
 import java.awt.Dimension
+import java.awt.GraphicsEnvironment
+import java.awt.HeadlessException
+import java.awt.MouseInfo
+import java.awt.Point
 import java.awt.Rectangle
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.JLayeredPane
+import org.junit.Assume.assumeTrue
+import kotlin.test.assertFailsWith
 
 @Suppress("UnstableApiUsage")
 class LayeredOverlayPanelTest : BasePlatformTestCase() {
@@ -76,7 +84,8 @@ class LayeredOverlayPanelTest : BasePlatformTestCase() {
 
         assertTrue(root.blocker.isVisible)
         assertEquals(1, root.blocker.componentCount)
-        assertEquals(Rectangle(60, 38, 80, 24), child.bounds)
+        val pad = UiStyle.Gap.pad()
+        assertEquals(Rectangle((200 - 80) / 2 - pad, (100 - 24) / 2 - pad, 80, 24), child.bounds)
     }
 
     fun `test clearing modal content hides and removes blocker children`() {
@@ -99,6 +108,87 @@ class LayeredOverlayPanelTest : BasePlatformTestCase() {
 
         root.setBlocked(true)
         assertTrue(root.blocker.contains(50, 50))
+    }
+
+    fun `test a blocking overlay releases the hover of the content it covers`() {
+        val root = LayeredOverlayPanel().apply { setSize(400, 260) }
+        val hovered = Hovered()
+        root.content.add(hovered)
+        root.addOverlay(Probe(), blocks = true) { _, item -> Rectangle(0, 0, item.preferredSize.width, item.preferredSize.height) }
+        root.doLayout()
+
+        root.releaseHover(Point(20, 10))
+
+        assertEquals(1, hovered.exits)
+    }
+
+    fun `test content keeps its hover where no blocking overlay covers it`() {
+        val root = LayeredOverlayPanel().apply { setSize(400, 260) }
+        val hovered = Hovered()
+        root.content.add(hovered)
+        root.addOverlay(Probe(), blocks = true) { _, item -> Rectangle(0, 0, item.preferredSize.width, item.preferredSize.height) }
+        root.doLayout()
+
+        root.releaseHover(Point(200, 200))
+
+        assertEquals(0, hovered.exits)
+    }
+
+    fun `test a decorating overlay leaves the hover of the content below alone`() {
+        val root = LayeredOverlayPanel().apply { setSize(400, 260) }
+        val hovered = Hovered()
+        root.content.add(hovered)
+        // A hover affordance drawn for the row it sits on must not take that row's hover away.
+        root.addOverlay(Probe()) { _, item -> Rectangle(0, 0, item.preferredSize.width, item.preferredSize.height) }
+        root.doLayout()
+
+        root.releaseHover(Point(20, 10))
+
+        assertEquals(0, hovered.exits)
+    }
+
+    fun `test the blocker releases the hover of the content under the pointer`() {
+        val root = LayeredOverlayPanel().apply { setSize(400, 260) }
+        val hovered = Hovered()
+        root.content.add(hovered)
+        root.doLayout()
+
+        root.releaseHover(Point(20, 10))
+        assertEquals(0, hovered.exits)
+
+        root.setBlocked(true)
+        root.releaseHover(Point(20, 10))
+
+        assertEquals(1, hovered.exits)
+    }
+
+    fun `test unavailable pointer lookup is non fatal and does not prevent later hover release`() {
+        assumeTrue(GraphicsEnvironment.isHeadless())
+        assertFailsWith<HeadlessException> { MouseInfo.getPointerInfo() }
+        val root = LayeredOverlayPanel().apply { setSize(400, 260) }
+        val hovered = Hovered()
+        root.content.add(hovered)
+        root.setBlocked(true)
+        val pointer = LayeredOverlayPanel::class.java.getDeclaredMethod("pointer").apply { isAccessible = true }
+
+        repeat(2) { assertNull(pointer.invoke(root)) }
+        assertEquals(0, hovered.exits)
+        root.releaseHover(Point(20, 10))
+        assertEquals(1, hovered.exits)
+    }
+
+    private class Hovered : BorderLayoutPanel() {
+        var exits = 0
+            private set
+
+        init {
+            setBounds(0, 0, 400, 260)
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseExited(e: MouseEvent) {
+                    exits++
+                }
+            })
+        }
     }
 
     private class Probe : BorderLayoutPanel() {

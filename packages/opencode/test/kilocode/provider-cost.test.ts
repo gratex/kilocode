@@ -9,10 +9,11 @@ function createModel(opts: {
   input?: number
   cost?: Provider.Model["cost"]
   npm?: string
+  providerID?: string
 }): Provider.Model {
   return {
     id: "test-model",
-    providerID: "test",
+    providerID: opts.providerID ?? "test",
     name: "Test",
     limit: {
       context: opts.context,
@@ -51,132 +52,173 @@ const kilo = { id: "kilo" } as Provider.Info
 // Calculated cost for the `model()` + `baseUsage` pair: 1M input * $3 + 100k output * $15 = 3 + 1.5
 const fallback = 3 + 1.5
 
-describe("KiloSession.providerCost — Anthropic Messages / OpenAI Responses", () => {
-  test("uses provider usage cost_details for Anthropic Messages via OpenRouter", () => {
-    const result = SessionNs.getUsage({
-      model: model(),
-      provider: kilo,
-      usage: new Usage({
-        inputTokens: baseUsage.inputTokens,
-        outputTokens: baseUsage.outputTokens,
-        totalTokens: baseUsage.totalTokens,
-        providerMetadata: {
-          anthropic: {
-            input_tokens: 1,
-            output_tokens: 1121,
-            cache_creation_input_tokens: 5385,
-            cache_read_input_tokens: 106831,
-            cost: 0.0057550875,
-            is_byok: true,
-            cost_details: {
-              upstream_inference_cost: 0.11510175,
-            },
-          },
-        },
-      }),
-    })
-
-    expect(result.cost).toBe(0.11510175)
+const kiloUsage = (raw: Record<string, unknown>) =>
+  new Usage({
+    inputTokens: baseUsage.inputTokens,
+    outputTokens: baseUsage.outputTokens,
+    totalTokens: baseUsage.totalTokens,
+    providerMetadata: { aiSdk: raw },
   })
 
-  test("uses provider usage cost_details for OpenAI Responses via OpenRouter", () => {
+describe("KiloSession.providerCost — Kilo Gateway", () => {
+  test("uses usage.cost, the Kilo charge, and ignores the upstream cost", () => {
     const result = SessionNs.getUsage({
       model: model(),
       provider: kilo,
-      usage: new Usage({
-        inputTokens: baseUsage.inputTokens,
-        outputTokens: baseUsage.outputTokens,
-        totalTokens: baseUsage.totalTokens,
-        providerMetadata: {
-          openai: {
-            input_tokens: 622051,
-            input_tokens_details: { cached_tokens: 594944 },
-            output_tokens: 304,
-            output_tokens_details: { reasoning_tokens: 0 },
-            total_tokens: 622355,
-            cost: 0.0439847,
-            is_byok: true,
-            cost_details: {
-              upstream_inference_cost: 0.879694,
-              upstream_inference_input_cost: 0.866014,
-              upstream_inference_output_cost: 0.01368,
-            },
-          },
-        },
-      }),
+      usage: kiloUsage({ cost: 0.0439847, is_byok: false, cost_details: { upstream_inference_cost: 0.879694 } }),
+    })
+
+    expect(result.cost).toBe(0.0439847)
+  })
+
+  test("keeps a reported zero charge", () => {
+    const result = SessionNs.getUsage({
+      model: model(),
+      provider: kilo,
+      usage: kiloUsage({ cost: 0, is_byok: false, cost_details: { upstream_inference_cost: 0.5 } }),
+    })
+
+    expect(result.cost).toBe(0)
+  })
+
+  test("uses upstream_inference_cost when the call ran on the user's own key", () => {
+    const result = SessionNs.getUsage({
+      model: model(),
+      provider: kilo,
+      usage: kiloUsage({ cost: 0, is_byok: true, cost_details: { upstream_inference_cost: 0.879694 } }),
     })
 
     expect(result.cost).toBe(0.879694)
   })
 
-  test("uses preserved AI SDK raw usage cost_details", () => {
+  test("ignores normalized OpenRouter metadata in favor of the raw usage", () => {
     const result = SessionNs.getUsage({
       model: model(),
       provider: kilo,
-      usage: new Usage({
-        inputTokens: baseUsage.inputTokens,
-        outputTokens: baseUsage.outputTokens,
-        totalTokens: baseUsage.totalTokens,
-        providerMetadata: {
-          aiSdk: {
-            cost: 0.0439847,
-            cost_details: { upstream_inference_cost: 0.879694 },
-          },
-        },
-      }),
+      usage: kiloUsage({ cost: 0.5, is_byok: false, cost_details: { upstream_inference_cost: 0.879694 } }),
+      metadata: { openrouter: { usage: { cost: 0.5, costDetails: { upstreamInferenceCost: 0.879694 } } } },
     })
 
-    expect(result.cost).toBe(0.879694)
+    expect(result.cost).toBe(0.5)
   })
 
-  test("ignores provider `cost` when no upstream_inference_cost is reported", () => {
+  test("ignores a Vercel market cost", () => {
     const result = SessionNs.getUsage({
       model: model(),
       provider: kilo,
-      usage: new Usage({
-        inputTokens: baseUsage.inputTokens,
-        outputTokens: baseUsage.outputTokens,
-        totalTokens: baseUsage.totalTokens,
-        providerMetadata: { anthropic: { cost: 0.5 } },
-      }),
+      usage: baseUsage,
+      metadata: { gateway: { cost: "0", marketCost: "0.35349075" } },
+    })
+
+    expect(result.cost).toBe(fallback)
+  })
+
+  test.each([undefined, null, "0.1", -0.5, Number.NaN, Infinity])(
+    "falls back to calculated cost for a malformed cost: %p",
+    (value) => {
+      const result = SessionNs.getUsage({
+        model: model(),
+        provider: kilo,
+        usage: kiloUsage({ cost: value, cost_details: { upstream_inference_cost: value } }),
+      })
+
+      expect(result.cost).toBe(fallback)
+    },
+  )
+
+  test("falls back to calculated cost for BYOK without an upstream cost", () => {
+    const result = SessionNs.getUsage({
+      model: model(),
+      provider: kilo,
+      usage: kiloUsage({ cost: 0.01, is_byok: true }),
     })
 
     expect(result.cost).toBe(fallback)
   })
 })
 
-describe("KiloSession.providerCost — Vercel AI Gateway", () => {
-  test("uses metadata.gateway.marketCost", () => {
+describe("KiloSession.providerCost — OpenRouter chat completions", () => {
+  const openrouterModel = () =>
+    createModel({
+      context: 100_000,
+      output: 32_000,
+      npm: "@openrouter/ai-sdk-provider",
+      providerID: "openrouter",
+    })
+
+  test("uses upstream_inference_cost when OpenRouter reports $0 for BYOK routing", () => {
     const result = SessionNs.getUsage({
-      model: model(),
-      provider: kilo,
+      model: openrouterModel(),
       usage: baseUsage,
       metadata: {
-        gateway: {
-          // Strings, exactly as emitted by the AI Gateway. `cost` is the gateway fee,
-          // which Kilo doesn't pass on to end users — must be ignored.
-          cost: "0",
-          marketCost: "0.35349075",
+        openrouter: {
+          usage: {
+            // Raw OpenRouter payload for a BYOK key: { cost: 0, is_byok: true,
+            // cost_details: { upstream_inference_cost: 0.00000445 } }. The AI SDK
+            // normalizes cost_details -> costDetails. `cost` is what OpenRouter
+            // charged the account ($0 by definition for BYOK); true spend is
+            // upstream plus that account charge.
+            cost: 0,
+            costDetails: { upstreamInferenceCost: 0.00000445 },
+          },
         },
       },
     })
 
-    expect(result.cost).toBe(0.35349075)
+    expect(result.cost).toBe(0.00000445)
   })
 
-  test("ignores metadata.gateway.cost when marketCost is missing", () => {
+  test("adds upstream_inference_cost to the BYOK routing fee", () => {
     const result = SessionNs.getUsage({
-      model: model(),
-      provider: kilo,
+      model: openrouterModel(),
       usage: baseUsage,
       metadata: {
-        gateway: {
-          cost: "0.123",
+        openrouter: {
+          usage: {
+            // Observed BYOK shape in kilo-gateway fixtures: `cost` is OpenRouter's
+            // routing fee; upstream is billed to the user's own key. True spend is
+            // the sum.
+            cost: 0.0032093125,
+            costDetails: { upstreamInferenceCost: 0.06418625 },
+          },
         },
       },
     })
 
-    expect(result.cost).toBe(fallback)
+    expect(result.cost).toBe(0.0032093125 + 0.06418625)
+  })
+
+  test("keeps usage.cost for a non-BYOK OpenRouter response", () => {
+    const result = SessionNs.getUsage({
+      model: openrouterModel(),
+      usage: baseUsage,
+      metadata: {
+        openrouter: {
+          usage: {
+            // Non-BYOK: `cost` is the full account charge (upstream + fee), the
+            // value surfaced today. It must not change.
+            cost: 0.0123,
+            costDetails: { upstreamInferenceCost: 0.0117 },
+          },
+        },
+      },
+    })
+
+    expect(result.cost).toBe(0.0123)
+  })
+
+  test("keeps usage.cost when no cost_details are reported", () => {
+    const result = SessionNs.getUsage({
+      model: openrouterModel(),
+      usage: baseUsage,
+      metadata: {
+        openrouter: {
+          usage: { cost: 0.0123 },
+        },
+      },
+    })
+
+    expect(result.cost).toBe(0.0123)
   })
 })
 

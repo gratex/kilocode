@@ -123,7 +123,7 @@ class SessionUiFactoryTest : BasePlatformTestCase() {
         override fun newSession() {
         }
 
-        override fun showHistory() {
+        override fun showHistory(back: (() -> Unit)?) {
             history++
         }
 
@@ -131,6 +131,7 @@ class SessionUiFactoryTest : BasePlatformTestCase() {
             val id = when (ref) {
                 is SessionRef.Local -> ref.id
                 is SessionRef.Cloud -> ref.key
+                is SessionRef.Hosted -> ref.key
             }
             opened.add(id)
         }

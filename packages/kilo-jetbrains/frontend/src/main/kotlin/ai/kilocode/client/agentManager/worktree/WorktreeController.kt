@@ -1,0 +1,583 @@
+package ai.kilocode.client.agentManager.worktree
+
+import ai.kilocode.client.plugin.KiloBundle
+import ai.kilocode.client.telemetry.Telemetry
+import ai.kilocode.client.util.edt
+import ai.kilocode.client.session.SessionActivityKind
+import ai.kilocode.log.KiloLog
+import ai.kilocode.rpc.dto.CreateWorktreeRequestDto
+import ai.kilocode.rpc.dto.CreateWorktreeResultDto
+import ai.kilocode.rpc.dto.MoveStage
+import ai.kilocode.rpc.dto.orphans.OrphanDto
+import ai.kilocode.rpc.dto.RemoveWorktreeResultDto
+import ai.kilocode.rpc.dto.SessionActivityDto
+import ai.kilocode.rpc.dto.WorktreeDto
+import ai.kilocode.rpc.dto.WorktreeListDto
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.components.service
+import com.intellij.ui.CollectionListModel
+import com.intellij.util.concurrency.annotations.RequiresEdt
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+
+enum class CreateKind { CREATE, BRANCH, PR }
+
+data class CreateFailure(val error: String?, val kind: CreateKind, val branch: String)
+
+/**
+ * Owns the worktree list model and drives the [KiloWorktreeService] off the EDT. Model mutations
+ * are marshalled back onto the EDT via [edt]. Mirrors the History stack's controller shape.
+ */
+class WorktreeController(
+    private val service: KiloWorktreeService,
+    val directory: String,
+    private val cs: CoroutineScope,
+    activity: StateFlow<Map<String, SessionActivityDto>> = MutableStateFlow(emptyMap()),
+    private val abort: suspend (String, String) -> Unit = { _, _ -> },
+    private val telemetry: (String, Map<String, String>) -> Unit = { event, props -> Telemetry.send(event, props) },
+) {
+    companion object {
+        private val LOG = KiloLog.create(WorktreeController::class.java)
+    }
+
+    val model = CollectionListModel<WorktreeDto>()
+    private val pending = LinkedHashMap<String, WorktreeDto>()
+    private val tasks = LinkedHashMap<String, String>()
+    private val moves = LinkedHashSet<String>()
+    var onSelect: ((String) -> Unit)? = null
+
+    /** Fired on the EDT once a worktree exists, so callers can refresh state git just changed. */
+    var onCreated: ((WorktreeDto) -> Unit)? = null
+
+    /**
+     * Fired on the EDT after a reload settled. Replacing the model only notifies list listeners when
+     * the rows actually changed, so a repo whose sole worktree is the main one would otherwise never
+     * render its [current] row.
+     */
+    var onReload: (() -> Unit)? = null
+    var onCreateFailure: ((CreateFailure) -> Unit)? = null
+    var onMoveFailure: ((String?) -> Unit)? = null
+    var onRemoveSuccess: ((WorktreeDto, Int) -> Unit)? = null
+    var onActivityChanged: (() -> Unit)? = null
+
+    /**
+     * Fired on the EDT when an accepted [reload] applies a branch change. The argument holds the
+     * normalized paths whose branch moved; callers use this to drop PR and stats state resolved
+     * against the old branch, regardless of whether a poll or a manual refresh found the change.
+     */
+    var onBranchChanged: ((Set<String>) -> Unit)? = null
+
+    @Volatile
+    private var kinds: Map<String, SessionActivityKind> = emptyMap()
+
+    private val generation = AtomicInteger()
+    private var branchJob: Job? = null
+
+    init {
+        // The New Worktree dialog rejects a pull request from another repository using [origin], and
+        // it can open before any reload has run — the chat dock and worktree editor actions call
+        // configure() directly, and only selecting the Agent Manager tab triggers a reload. Resolve
+        // it here so the check is armed on every entry path, not just the tab one.
+        cs.launch {
+            val info = service.listBranches(directory)
+            edt { origin = info.origin }
+        }
+        cs.launch {
+            activity.collect { snap ->
+                edt {
+                    kinds = aggregateWorktreeActivity(snap)
+                    onActivityChanged?.invoke()
+                }
+            }
+        }
+    }
+
+    /** Branch checked out in the main worktree; used as the base for quick worktree creation. */
+    @Volatile
+    var defaultBranch: String = "main"
+        private set
+
+    /** Branches eligible as a base, i.e. local branches not already checked out in a worktree. */
+    @Volatile
+    var branches: List<String> = emptyList()
+        private set
+
+    /** Primary worktree for the current branch, shown above local worktrees in Agent Manager. */
+    @Volatile
+    var current: WorktreeDto? = null
+        private set
+
+    /** Every known branch name, used to keep generated worktree names collision-free. */
+    @Volatile
+    private var known: Set<String> = emptySet()
+
+    /**
+     * Directories under `.kilo/worktrees/` that git does not track, from the most recent [reload].
+     * [ai.kilocode.client.agentManager.orphans.OrphanBanner] reads this on the EDT after [onReload]
+     * fires — never polled independently, so the banner and the worktree list always agree on which
+     * paths are orphans.
+     */
+    @Volatile
+    var orphans: List<OrphanDto> = emptyList()
+        private set
+
+    /** `owner/repo` for the checkout's origin remote; null when there is no GitHub origin. */
+    @Volatile
+    var origin: String? = null
+        private set
+
+    fun isPending(id: String): Boolean = id in pending
+
+    fun progress(id: String): String? = tasks[id]
+
+    fun kind(path: String): SessionActivityKind? = kinds[normalizeWorktreePath(path)]
+
+    fun reload() = reload(null, service<PendingWorktreePrompt>().bound(directory))
+
+    private fun reload(snapshot: WorktreeListDto?, before: Set<String>) {
+        val gen = generation.incrementAndGet()
+        cs.launch {
+            val listing = async { snapshot ?: service.list(directory) }
+            val branchInfo = service.listBranches(directory)
+            val result = listing.await()
+            edt {
+                // A branch watcher can start a reload while an older one is still in flight. Only the
+                // newest answer may replace the model, or a stale listing would restore the branch the
+                // watcher just proved gone.
+                if (gen != generation.get()) return@edt
+                val moved = branchesMoved(result)
+                val main = result.worktrees.firstOrNull { it.main }
+                // Git registers (and temporarily locks) a checkout before creation returns. Keep
+                // its placeholder until completion owns the authoritative row and prompt handoff.
+                val extra = result.worktrees.filter { row ->
+                    !row.main && pending.values.none { it.branch.isNotBlank() && it.branch == row.branch }
+                }
+                val rows = pending.values.toList().asReversed() + extra
+                if (main != null) {
+                    service<PendingWorktreePrompt>().reconcile(directory, result.worktrees.map { it.path }, before)
+                }
+                current = main
+                model.replaceAll(rows)
+                cache().putAll(rows)
+                defaultBranch = main?.branch?.takeIf { it.isNotBlank() && it != "(detached)" } ?: "main"
+                val worktreeBranches = rows.mapTo(HashSet()) { it.branch }
+                branches = branchInfo.branches.filter { it !in worktreeBranches }
+                known = branchInfo.branches.toMutableSet().apply { addAll(rows.map { it.branch }) }
+                origin = branchInfo.origin
+                orphans = result.orphans
+                if (!moved.isNullOrEmpty()) onBranchChanged?.invoke(moved)
+                onReload?.invoke()
+                telemetry("Worktree List Loaded", mapOf("count" to extra.size.toString()))
+            }
+        }
+    }
+
+    /**
+     * Checks whether a checkout moved to another branch without Agent Manager noticing. The list
+     * reloads on a tab switch or an explicit refresh, so a branch started from the Git tool window,
+     * or switched by an agent inside a worktree, otherwise leaves the row labelled with the old
+     * branch — and the PR badge already resolved for that row keeps belonging to it.
+     *
+     * One `git worktree list` answers for every checkout. The model is only replaced when a branch
+     * (or the set of worktrees) actually differs, so the tree and its selection stay stable on a
+     * poll that found nothing.
+     */
+    fun refreshBranches() {
+        if (branchJob?.isActive == true) return
+        val gen = generation.get()
+        val before = service<PendingWorktreePrompt>().bound(directory)
+        branchJob = cs.launch {
+            val listing = service.list(directory)
+            edt {
+                // A newer reload owns the model now; this older poll must not invalidate its PR state.
+                if (gen != generation.get()) return@edt
+                if (listing.worktrees.any { it.main }) {
+                    service<PendingWorktreePrompt>().reconcile(directory, listing.worktrees.map { it.path }, before)
+                }
+                if (branchesMoved(listing) == null) return@edt
+                LOG.info("worktree branches changed, reloading the list")
+                reload(listing, before)
+            }
+        }
+    }
+
+    /**
+     * Normalized paths whose branch differs from [listing], or an empty set when only the set of
+     * worktrees changed. `null` means the rows still match, or the listing failed (no main entry).
+     */
+    private fun branchesMoved(listing: WorktreeListDto): Set<String>? {
+        val main = listing.worktrees.firstOrNull { it.main } ?: return null
+        val shownMain = current
+        val shown = (0 until model.size).mapNotNull { index ->
+            val item = model.getElementAt(index)
+            if (isPending(item.id)) null else normalizeWorktreePath(item.path) to item.branch
+        }.toMap()
+        val fresh = listing.worktrees.asSequence()
+            .filterNot { it.main }
+            .associate { normalizeWorktreePath(it.path) to it.branch }
+        val moved = fresh.mapNotNullTo(HashSet()) { (path, branch) ->
+            shown[path]?.takeIf { it != branch }?.let { path }
+        }
+        if (shownMain != null && main.branch != shownMain.branch) moved += normalizeWorktreePath(main.path)
+        return when {
+            // Nothing has been shown yet: this is the first load, not a branch change, so reload but
+            // leave PR state alone — no badge was resolved against an old branch.
+            shownMain == null -> emptySet()
+            moved.isEmpty() && shown.keys == fresh.keys -> null
+            else -> moved
+        }
+    }
+
+    /** A generated friendly branch name not already used by any branch or worktree. */
+    fun suggestName(): String = WorktreeNames.generate(known)
+
+    /** Creates a worktree immediately with a generated friendly name, based on [defaultBranch]. */
+    fun quickCreate() = create(suggestName(), defaultBranch)
+
+    /** Imports a worktree that checks out an existing local branch. */
+    fun importBranch(branch: String, place: (String, String?) -> Unit = { _, _ -> }) =
+        create(branch, base = null, existingBranch = true, kind = CreateKind.BRANCH, place = place)
+
+    /**
+     * Creates a worktree. When [prompt] is set, it is stashed for the worktree's first session so the
+     * editor auto-sends it once it opens with its picked mode/model (see [PendingWorktreePrompt]).
+     * [place] receives each ID and its pending predecessor (null for pending rows) on the EDT
+     * before their rows notify model listeners.
+     */
+    @Suppress("TooGenericExceptionCaught") // RPC failures must retain the draft and clear pending state.
+    fun create(
+        branch: String,
+        base: String?,
+        existingBranch: Boolean = false,
+        prompt: PendingPrompt? = null,
+        kind: CreateKind = CreateKind.CREATE,
+        fetchBase: Boolean = false,
+        place: (String, String?) -> Unit = { _, _ -> },
+    ) {
+        val id = "pending:$branch:${System.nanoTime()}"
+        val temp = WorktreeDto(id, branch, branch, id)
+        edt {
+            val token = prompt?.let {
+                val store = service<PendingWorktreePrompt>()
+                store.remember(directory, branch, base, it, fetchBase)?.also(store::begin)
+            }
+            pending[temp.id] = temp
+            tasks[temp.id] = KiloBundle.message("worktree.progress.creating")
+            place(temp.id, null)
+            publish { model.add(0, temp) }
+            publish { onSelect?.invoke(temp.id) }
+            cs.launch {
+                val result = try {
+                    service.create(
+                        directory,
+                        CreateWorktreeRequestDto(branch, base, existingBranch = existingBranch, fetchBase = fetchBase),
+                    )
+                } catch (err: CancellationException) {
+                    finishCreate(temp, branch, token, CreateWorktreeResultDto(error = err.message), kind, place)
+                    throw err
+                } catch (err: Exception) {
+                    LOG.warn("worktree creation failed for $branch", err)
+                    CreateWorktreeResultDto(error = err.message)
+                }
+                finishCreate(temp, branch, token, result, kind, place)
+            }.invokeOnCompletion { err ->
+                // A cancelled owner can prevent the coroutine body (and its cleanup) from starting.
+                if (err != null) {
+                    finishCreate(temp, branch, token, CreateWorktreeResultDto(error = err.message), kind, place)
+                }
+            }
+        }
+    }
+
+    fun importPr(url: String, place: (String, String?) -> Unit = { _, _ -> }) {
+        val id = "pending:pr:${System.nanoTime()}"
+        val temp = WorktreeDto(id, KiloBundle.message("worktree.import.pr.section"), "", id)
+        edt {
+            pending[temp.id] = temp
+            tasks[temp.id] = KiloBundle.message("worktree.progress.creating")
+            place(temp.id, null)
+            model.add(0, temp)
+            onSelect?.invoke(temp.id)
+        }
+        cs.launch {
+            val result = service.importPr(directory, url)
+            finishCreate(temp, "pr", null, result, CreateKind.PR, place)
+        }
+    }
+
+    private fun finishCreate(
+        temp: WorktreeDto,
+        branch: String,
+        token: String?,
+        result: CreateWorktreeResultDto,
+        kind: CreateKind,
+        place: (String, String?) -> Unit,
+    ) {
+        val created = result.worktree
+        edt {
+            if (pending.remove(temp.id) == null) return@edt
+            // Invalidate every listing/poll started before this completion, including snapshots
+            // containing the checkout's temporary lock or no checkout at all.
+            generation.incrementAndGet()
+            tasks.remove(temp.id)
+            val rows = (0 until model.size).map { model.getElementAt(it) }.filterNot {
+                it.id == temp.id || (created != null &&
+                    (it.id == created.id || normalizeWorktreePath(it.path) == normalizeWorktreePath(created.path)))
+            }
+            if (created != null) {
+                place(created.id, temp.id)
+                if (token == null) service<PendingWorktreePrompt>().forget(created.path)
+                token?.let { service<PendingWorktreePrompt>().bind(it, created.path) }
+                token?.let { service<PendingWorktreePrompt>().finish(it) }
+                // Completion is authoritative even when the preceding metadata reload was discarded.
+                branches = branches.filterNot { it == created.branch }
+                known = known + created.branch
+                publish { cache().put(created) }
+                publish { model.replaceAll(listOf(created) + rows) }
+                publish { onSelect?.invoke(created.id) }
+                publish { onCreated?.invoke(created) }
+                telemetry("Worktree Created", mapOf("branch" to branch))
+                return@edt
+            }
+            token?.let { service<PendingWorktreePrompt>().finish(it) }
+            publish { model.replaceAll(rows) }
+            // A reload may have hidden a pre-existing same-branch checkout while this request
+            // was pending. Failure must restore git's list without requiring a manual refresh.
+            reload()
+            telemetry("Worktree Create Failed", mapOf("branch" to branch))
+            onCreateFailure?.invoke(CreateFailure(result.error, kind, branch))
+        }
+    }
+
+    /**
+     * Removes [dto]. Pass [force] to unlock a locked worktree before removing it. On failure the
+     * row is kept and [onFailure] is invoked on the EDT so the caller can surface a follow-up
+     * (e.g. a "force delete" notification), then the list reconciles with git ground truth.
+     */
+    fun remove(
+        dto: WorktreeDto,
+        force: Boolean = false,
+        onSuccess: () -> Unit = {},
+        onFailure: (RemoveWorktreeResultDto) -> Unit = {},
+    ) {
+        if (dto.id in tasks) return
+        tasks[dto.id] = KiloBundle.message("common.deleting")
+        edt { refresh(dto) }
+        cs.launch {
+            val start = System.currentTimeMillis()
+            // Stop anything the worktree run popup started here first, so git can remove the
+            // directory without orphaning a process left running against a deleted working tree.
+            service<KiloRunService>().release(directory, dto.path)
+            val result = service.remove(directory, dto.path, dto.branch, force)
+            val ms = System.currentTimeMillis() - start
+            if (result.ok) {
+                LOG.info("worktree delete: path=${dto.path} force=$force ok=true ms=$ms")
+                edt {
+                    tasks.remove(dto.id)
+                    service<PendingWorktreePrompt>().forget(dto.path)
+                    val index = model.getElementIndex(dto)
+                    model.remove(dto)
+                    cache().remove(dto.path)
+                    onRemoveSuccess?.invoke(dto, index)
+                    onSuccess()
+                    telemetry("Worktree Deleted", mapOf("branch" to dto.branch, "force" to force.toString()))
+                }
+                return@launch
+            }
+            // Removal failed: git still tracks the worktree. Keep the row and reconcile with
+            // ground truth so a stale optimistic delete can't make the entry reappear later.
+            LOG.warn("worktree delete: path=${dto.path} force=$force ok=false locked=${result.locked} ms=$ms error=${result.error}")
+            edt {
+                tasks.remove(dto.id)
+                refresh(dto)
+                telemetry(
+                    "Worktree Delete Failed",
+                    mapOf("branch" to dto.branch, "force" to force.toString(), "locked" to result.locked.toString()),
+                )
+                onFailure(result)
+            }
+            reload()
+        }
+    }
+
+    /**
+     * Fire-and-forget reveal for a path this controller manages (e.g. a worktree blocking a delete).
+     * [onFailure] runs on the EDT when the host can't reveal the path (unsupported platform, or the
+     * directory is already gone) so callers can surface that instead of silently no-op'ing.
+     */
+    fun reveal(path: String, onFailure: () -> Unit = {}) {
+        cs.launch {
+            val ok = service.revealPath(path)
+            if (!ok) edt { onFailure() }
+        }
+    }
+
+    /**
+     * Copies working-tree changes into a new worktree. When [sessionId] is set, the source session is
+     * also forked into the worktree; otherwise the opened worktree starts with a fresh session.
+     * [surface] is reported only on the "Continue in Worktree" telemetry event, so callers other than
+     * the sidebar chat dock (e.g. the worktree editor's session list or its own action toolbar) can be
+     * told apart.
+     */
+    @RequiresEdt
+    fun move(sessionId: String?, source: String = directory, surface: String = "sidebar") {
+        val key = sessionId ?: source
+        if (!moves.add(key)) return
+        val branch = suggestName()
+        val temp = WorktreeDto("pending:$branch:${System.nanoTime()}", branch, branch, "pending:$branch")
+        pending[temp.id] = temp
+        tasks[temp.id] = label(MoveStage.CAPTURING)
+        model.add(0, temp)
+        onSelect?.invoke(temp.id)
+        cs.launch {
+            var stage = MoveStage.CAPTURING
+            runCatching {
+                if (sessionId != null) abort(sessionId, source)
+                service.moveToWorktree(source, sessionId, branch).collect { event ->
+                    edt {
+                        if (event.stage != MoveStage.ERROR) stage = event.stage
+                        tasks[temp.id] = label(event.stage)
+                        refresh(temp)
+                        when (event.stage) {
+                            MoveStage.DONE -> {
+                                moves.remove(key)
+                                pending.remove(temp.id)
+                                tasks.remove(temp.id)
+                                val worktree = event.worktree ?: return@edt
+                                val idx = model.getElementIndex(temp)
+                                if (idx >= 0) model.setElementAt(worktree, idx) else model.add(0, worktree)
+                                cache().put(worktree)
+                                // Queue the forked session for the editor the selection is about to
+                                // open; the tab's identity stays the worktree path alone.
+                                event.session?.let { service<PendingWorktreeSession>().put(worktree.path, it) }
+                                onSelect?.invoke(worktree.id)
+                                onCreated?.invoke(worktree)
+                                telemetry(
+                                    "Continue in Worktree",
+                                    mapOf("surface" to surface, "session" to (sessionId != null).toString()),
+                                )
+                            }
+                            MoveStage.ERROR -> failMove(key, temp, event.error, stage)
+                            else -> Unit
+                        }
+                    }
+                }
+            }.onFailure { err -> edt { failMove(key, temp, err.message, stage) } }
+        }
+    }
+
+    fun rename(
+        dto: WorktreeDto,
+        name: String,
+        onSuccess: (WorktreeDto) -> Unit = {},
+        onFailure: (String?) -> Unit = {},
+    ) {
+        val title = name.trim()
+        if (title.isEmpty() || title == dto.name) return
+        edt {
+            val idx = index(dto.id)
+            if (idx < 0) return@edt
+            val row = dto.copy(name = title)
+            model.setElementAt(row, idx)
+            cache().put(row)
+        }
+        cs.launch {
+            val result = service.rename(directory, dto.path, title)
+            edt {
+                val updated = result.worktree
+                if (updated != null) {
+                    index(dto.id).takeIf { it >= 0 }?.let { model.setElementAt(updated, it) }
+                    cache().put(updated)
+                    telemetry("Worktree Renamed", mapOf("path" to dto.path))
+                    onSuccess(updated)
+                    return@edt
+                }
+                index(dto.id).takeIf { it >= 0 }?.let { model.setElementAt(dto, it) }
+                cache().put(dto)
+                telemetry("Worktree Rename Failed", mapOf("path" to dto.path))
+                onFailure(result.error)
+                reload()
+            }
+        }
+    }
+
+    /**
+     * Applies a new display order given as worktree row [keys] (ids). Reorders the model optimistically
+     * then persists the resulting paths via [KiloWorktreeService.reorder]; on failure the list reloads
+     * from git ground truth. Pending rows keep their relative slots (stable sort) and are not persisted.
+     */
+    fun reorder(keys: List<String>) {
+        val rows = (0 until model.size).map { model.getElementAt(it) }
+        val rank = keys.withIndex().associate { it.value to it.index }
+        val sorted = rows.sortedBy { rank[it.id] ?: Int.MAX_VALUE }
+        if (sorted == rows) return
+        model.replaceAll(sorted)
+        val paths = sorted.filter { !isPending(it.id) }.map { it.path }
+        cs.launch {
+            val ok = service.reorder(directory, paths)
+            if (!ok) edt { reload() }
+            edt { telemetry("Worktree Reordered", mapOf("count" to paths.size.toString())) }
+        }
+    }
+
+    /**
+     * Applies a name recorded elsewhere (e.g. adopted from a session title in an editor tab) to the
+     * matching row, so the worktree list reflects it live. No-ops when the path is not in this list
+     * or the name already matches, which also makes it safe against the cache echoing our own writes.
+     */
+    fun applyName(path: String, name: String?) {
+        if (name.isNullOrBlank()) return
+        val idx = (0 until model.size).firstOrNull { model.getElementAt(it).path == path } ?: return
+        val row = model.getElementAt(idx)
+        if (row.name == name) return
+        model.setElementAt(row.copy(name = name), idx)
+    }
+
+    private fun refresh(dto: WorktreeDto) {
+        val idx = model.getElementIndex(dto)
+        if (idx >= 0) model.setElementAt(dto, idx)
+    }
+
+    private fun index(id: String): Int {
+        return (0 until model.size).firstOrNull { model.getElementAt(it).id == id } ?: -1
+    }
+
+    private fun failMove(key: String, temp: WorktreeDto, err: String?, stage: MoveStage) {
+        moves.remove(key)
+        pending.remove(temp.id)
+        tasks.remove(temp.id)
+        model.remove(temp)
+        onMoveFailure?.invoke(err)
+        telemetry("Continue in Worktree Failed", mapOf("stage" to stage.name))
+    }
+
+    private fun label(stage: MoveStage): String = when (stage) {
+        MoveStage.CAPTURING -> KiloBundle.message("worktree.progress.capturing")
+        MoveStage.CREATING -> KiloBundle.message("worktree.progress.creating")
+        MoveStage.TRANSFERRING -> KiloBundle.message("worktree.progress.transferring")
+        MoveStage.FORKING -> KiloBundle.message("worktree.progress.starting")
+        MoveStage.DONE -> ""
+        MoveStage.ERROR -> ""
+    }
+
+    private fun cache(): WorktreeNameCache {
+        return ApplicationManager.getApplication().service()
+    }
+
+    /** A failing synchronous UI listener must not prevent cleanup or the remaining handoff. */
+    @RequiresEdt
+    @Suppress("TooGenericExceptionCaught")
+    private fun publish(action: () -> Unit) {
+        try {
+            action()
+        } catch (err: Exception) {
+            LOG.warn("worktree creation UI update failed", err)
+        }
+    }
+}

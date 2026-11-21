@@ -35,8 +35,6 @@ export enum TelemetryEventName {
 
   // Marketplace
   MARKETPLACE_INSTALL_BUTTON_CLICKED = "Marketplace Install Button Clicked",
-  MARKETPLACE_ITEM_INSTALLED = "Marketplace Item Installed",
-  MARKETPLACE_ITEM_REMOVED = "Marketplace Item Removed",
   MARKETPLACE_TAB_VIEWED = "Marketplace Tab Viewed",
 
   // Account & Auth
@@ -73,6 +71,7 @@ export enum TelemetryEventName {
   AGENT_MANAGER_SESSION_STOPPED = "Agent Manager Session Stopped",
   AGENT_MANAGER_SESSION_ERROR = "Agent Manager Session Error",
   AGENT_MANAGER_LOGIN_ISSUE = "Agent Manager Login Issue",
+  AGENT_MANAGER_WORKTREE_HEALTH = "Agent Manager Worktree Health",
   AUTO_PURGE_STARTED = "Auto Purge Started",
   AUTO_PURGE_COMPLETED = "Auto Purge Completed",
   AUTO_PURGE_FAILED = "Auto Purge Failed",

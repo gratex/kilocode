@@ -2,7 +2,8 @@
   description = "Kilo development flake";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    # kilocode_change - pin 26.05 security staging for patched Node/Brotli and x86_64-darwin support
+    nixpkgs.url = "github:NixOS/nixpkgs/4353e7cf16b1392d4def91dc089717e21ce8c71e";
   };
 
   outputs =
@@ -21,59 +22,7 @@
       devShells = forEachSystem (pkgs: {
         default =
           let
-            # Pin bun to the version declared in package.json (packageManager: "bun@1.3.14").
-            # The locked nixpkgs revision ships 1.3.11, so we fetch the official release directly.
-            bun =
-              let
-                sources = {
-                  "aarch64-linux" = {
-                    name = "bun-linux-aarch64";
-                    hash = "sha256-on/7Y6gxA3WDbg1vZorhf6jY0YuIw3yCHGUzGXOhmjs=";
-                  };
-                  "x86_64-linux" = {
-                    name = "bun-linux-x64";
-                    hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
-                  };
-                  "aarch64-darwin" = {
-                    name = "bun-darwin-aarch64";
-                    hash = "sha256-2LliIYKK1vl6x6wKt+lYcjQa92MAHogD6CZ2UsJlJiA=";
-                  };
-                  "x86_64-darwin" = {
-                    name = "bun-darwin-x64";
-                    hash = "sha256-QYPfM3RiPlurMVxUfPoJdFM81FfYa3O2OfeoeXTNZjM=";
-                  };
-                };
-                source =
-                  sources.${pkgs.stdenv.hostPlatform.system}
-                    or (throw "Unsupported system for bun: ${pkgs.stdenv.hostPlatform.system}");
-              in
-              pkgs.stdenv.mkDerivation rec {
-                pname = "bun";
-                version = "1.3.14";
-                src = pkgs.fetchurl {
-                  url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/${source.name}.zip";
-                  inherit (source) hash;
-                };
-                nativeBuildInputs = [
-                  pkgs.unzip
-                ] ++ pkgs.lib.optional pkgs.stdenv.isLinux pkgs.autoPatchelfHook;
-                buildInputs = pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.stdenv.cc.cc.lib ];
-                dontConfigure = true;
-                dontBuild = true;
-                installPhase = ''
-                  runHook preInstall
-                  install -Dm755 bun $out/bin/bun
-                  ln -s $out/bin/bun $out/bin/bunx
-                  runHook postInstall
-                '';
-                meta = {
-                  description = "Fast all-in-one JavaScript runtime";
-                  homepage = "https://bun.sh";
-                  license = pkgs.lib.licenses.mit;
-                  mainProgram = "bun";
-                  platforms = builtins.attrNames sources;
-                };
-              };
+            bun = pkgs.callPackage ./nix/bun.nix { };
 
             kilo-dev = pkgs.writeShellScriptBin "kilo-dev" ''
               set -euo pipefail
@@ -211,7 +160,7 @@
               with pkgs;
               [
                 bun
-                nodejs_20
+                nodejs_24 # kilocode_change - use a supported runtime with the Brotli security fix
                 python3
                 pkg-config
                 openssl
@@ -224,13 +173,13 @@
                 gzip
                 patchelf
                 ripgrep
-                jetbrains.jdk
                 jdk21
                 kilo-dev
                 kilo-install-bin
                 kilo-bin
               ]
               ++ lib.optionals stdenv.isLinux [
+                jetbrains.jdk-21 # kilocode_change - JBR is Linux-only; keep Java 21 on all platforms above
                 libX11
                 libXext
                 libXrender
@@ -264,26 +213,31 @@
         default =
           final: _prev:
           let
+            # kilocode_change start - match the Kilo package and its pinned dependency builder
+            bun = final.callPackage ./nix/bun.nix { };
             node_modules = final.callPackage ./nix/node_modules.nix {
-              inherit rev;
+              inherit bun rev;
             };
-            opencode = final.callPackage ./nix/opencode.nix {
-              inherit node_modules;
+            kilo = final.callPackage ./nix/kilo.nix {
+              inherit bun node_modules;
             };
           in
           {
-            inherit opencode;
+            inherit kilo;
+            opencode = kilo; # Preserve the existing overlay attribute for consumers.
+            # kilocode_change end
           };
       };
 
       packages = forEachSystem (
         pkgs:
         let
+          bun = pkgs.callPackage ./nix/bun.nix { };
           node_modules = pkgs.callPackage ./nix/node_modules.nix {
-            inherit rev;
+            inherit bun rev;
           };
           kilo = pkgs.callPackage ./nix/kilo.nix {
-            inherit node_modules;
+            inherit bun node_modules;
           };
         in
         {

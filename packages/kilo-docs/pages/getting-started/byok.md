@@ -1,11 +1,15 @@
 ---
 title: "Bring Your Own Key (BYOK)"
-description: "Use your own API keys with Kilo Gateway while retaining platform features"
+description: "Use your own API keys, connect a ChatGPT subscription, or link Claude billing with Kilo Gateway while retaining platform features"
 ---
 
 # Bring Your Own Key (BYOK)
 
 Bring Your Own Key (BYOK) lets you use your own API keys when using the Kilo Gateway, while retaining Kilo platform features like Code Reviews and Cloud Agents.
+
+You can also connect a ChatGPT subscription from this page without an API key. [ChatGPT connections](/docs/getting-started/byok#connect-a-chatgpt-subscription) and [provider API keys](/docs/getting-started/byok#add-a-byok-key) have different setup and billing behavior.
+
+For Claude models, we recommend [linking a Claude API organization](/docs/getting-started/byok#link-claude-billing) instead of saving an Anthropic API key. Anthropic bills your organization directly and no key leaves it.
 
 A user or organization may want to use BYOK to:
 
@@ -24,6 +28,7 @@ Use your provider API key to route matching models through your account:
 
 - Anthropic
 - AWS Bedrock
+- Azure Foundry (experimental)
 - DeepSeek
 - Fireworks
 - Google AI Studio
@@ -31,10 +36,11 @@ Use your provider API key to route matching models through your account:
 - Minimax
 - Mistral AI
 - Moonshot AI (Kimi)
+- Nebius Token Factory
 - Novita
 - OpenAI
 - Xiaomi
-- xAI
+- SpaceXAI
 - Z.ai
 
 ### Subscription and direct provider plans
@@ -47,8 +53,8 @@ These providers offer coding-focused subscriptions or dedicated endpoints. Bring
 - Inceptron BYOK
 - Kimi Code
 - Martian
-- Mistral Codestral
 - Neuralwatt
+- NVIDIA
 - Ollama Cloud
 - OpenCode Go
 - OrcaRouter
@@ -56,6 +62,20 @@ These providers offer coding-focused subscriptions or dedicated endpoints. Bring
 - Xiaomi Token Plan (Europe)
 - Xiaomi Token Plan (Singapore)
 - Z.ai Coding Plan
+
+## Connect a ChatGPT subscription
+
+Connect **OpenAI (ChatGPT subscription)** on the [BYOK page](https://app.kilo.ai/byok) to use your subscription allowance for supported OpenAI models through the Kilo Gateway. No OpenAI API key is needed.
+
+See [ChatGPT subscription setup](/docs/ai-providers/openai-chatgpt-plus-pro#connect-your-subscription-to-kilo) for connection steps, personal and organization scope, and billing details.
+
+## Link Claude billing
+
+Link a Claude API organization on the [BYOK page](https://app.kilo.ai/byok) with the **Claude (linked billing)** card. Anthropic then bills that organization directly for Claude models used through the Kilo Gateway. No Anthropic API key is needed.
+
+Linked billing uses API pricing, not a Claude Pro or Max subscription. In an organization, only owners and admins can set it up, and one link covers every member.
+
+See [Claude linked billing](/docs/ai-providers/claude-linked-billing) for setup steps.
 
 ## Add a BYOK key
 
@@ -66,7 +86,18 @@ These providers offer coding-focused subscriptions or dedicated endpoints. Bring
 
 ### AWS Bedrock configuration
 
-AWS Bedrock requires credentials in a different format than other providers. Instead of a single API key, you must provide your AWS credentials as a JSON object:
+AWS Bedrock requires JSON credentials. Use one of these two formats; don't mix fields from both.
+
+**Bedrock API key:** Generate a key in the AWS Bedrock console and use a region where the key and model are available. Replace the key before it expires.
+
+```json
+{
+  "apiKey": "...",
+  "region": "us-east-1"
+}
+```
+
+**IAM credentials:**
 
 ```json
 {
@@ -87,10 +118,38 @@ Your IAM user or role must have the following permissions:
 - `bedrock:InvokeModel`
 - `bedrock:InvokeModelWithResponseStream`
 
+### Azure Foundry configuration
+
+Select **Azure Foundry (experimental)** and enter JSON credentials. Use `resourceName` for the subdomain of your endpoint, such as `my-resource` from `my-resource.openai.azure.com`:
+
+```json
+{
+  "apiKey": "...",
+  "resourceName": "my-resource"
+}
+```
+
+If your deployment names differ from the gateway model IDs, add `modelMappings` to map each model to its Azure deployment:
+
+```json
+{
+  "apiKey": "...",
+  "resourceName": "my-resource",
+  "modelMappings": [
+    {
+      "gatewayModelSlug": "openai/gpt-5.4-nano",
+      "customModelId": "my-gpt-5-4-nano-deployment"
+    }
+  ]
+}
+```
+
 ## How Bring Your Own Key works
 
+These rules apply to saved API keys. Eligible requests use a connected ChatGPT subscription or a Claude billing link first.
+
 - When you use the **Kilo Gateway** provider, Kilo checks if there's a BYOK key for the selected model's provider.
-- If a matching BYOK key exists, the request is routed using your key.
+- If a matching BYOK key exists and the request is not served by a connected subscription like ChatGPT or a Claude billing link, the request is routed using your key.
 - If the key is invalid, the request fails. It does not fall back to using Kilo's keys.
 - Subscription-based providers (such as the Z.ai Coding Plan or Kimi Code) only expose the models included in that plan. Select one of those models to route traffic through your subscription.
 

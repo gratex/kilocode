@@ -3,20 +3,22 @@ package ai.kilocode.client.session.views
 import ai.kilocode.client.session.model.Tool
 import ai.kilocode.client.session.model.ToolExecState
 import ai.kilocode.client.session.model.toolKind
+import ai.kilocode.client.session.settings.BlockDisplay
+import ai.kilocode.client.session.settings.ReasoningDisplay
+import ai.kilocode.client.session.settings.TranscriptDisplay
 import ai.kilocode.client.session.ui.style.SessionEditorStyle
 import ai.kilocode.client.session.ui.style.SessionUiStyle
 import ai.kilocode.client.session.views.question.QuestionResultView
 import ai.kilocode.client.session.views.tool.ToolView
+import ai.kilocode.client.ui.UiStyle
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import java.awt.Color
+import com.intellij.ui.components.JBTextArea
 import java.awt.Component
 import java.awt.Container
 import java.awt.event.MouseEvent
-import java.awt.image.BufferedImage
 import javax.swing.Icon
 import javax.swing.JLabel
 import javax.swing.JPanel
-import javax.swing.border.Border
 
 @Suppress("UnstableApiUsage")
 class QuestionResultViewTest : BasePlatformTestCase() {
@@ -58,14 +60,14 @@ class QuestionResultViewTest : BasePlatformTestCase() {
         assertFalse(view.bodyText().contains("raw output should not be rendered"))
     }
 
-    fun `test collapsed view does not create body components`() {
+    fun `test collapsed setting does not create body components`() {
         val tool = completedTool(
             input = mapOf("questions" to """[{"question":"Q1"}]"""),
             metadata = mapOf("answers" to """[["A1"]]"""),
         )
-        val view = QuestionResultView(tool)
+        val view = QuestionResultView(tool, display = BlockDisplay.COLLAPSED)
 
-        assertFalse("Default collapsed state should not eagerly create body", view.bodyCreated())
+        assertFalse("A collapsed card should not eagerly create body", view.bodyCreated())
         assertTrue(view.bodyText().contains("Q1"))
         assertFalse("Reading assertion text should not create Swing body", view.bodyCreated())
     }
@@ -104,6 +106,20 @@ class QuestionResultViewTest : BasePlatformTestCase() {
         assertTrue(view.bodyText().contains("Manual verification, Unit tests"))
     }
 
+    fun `test answer rows keep standard gap after question text`() {
+        val view = QuestionResultView(completedTool(
+            input = mapOf("questions" to """[{"question":"Q1"}]"""),
+            metadata = mapOf("answers" to """[["A1"]]"""),
+        ))
+
+        val body = view.node(1)
+        val row = body.node(0)
+        val text = row.components[0] as JBTextArea
+        val ins = text.border.getBorderInsets(text)
+
+        assertEquals(UiStyle.Gap.xs(), ins.bottom)
+    }
+
     fun `test label shows count of non-empty answers`() {
         val tool = completedTool(
             input = mapOf("questions" to """[{"question":"Q1"},{"question":"Q2"}]"""),
@@ -117,6 +133,50 @@ class QuestionResultViewTest : BasePlatformTestCase() {
 
     // ------ toggle expand/collapse ------
 
+    fun `test cards start expanded by default`() {
+        val tool = completedTool(
+            input = mapOf("questions" to """[{"question":"Q1"}]"""),
+            metadata = mapOf("answers" to """[["A1"]]"""),
+        )
+
+        val view = QuestionResultView(tool)
+
+        assertTrue("Question cards start expanded", view.isExpanded())
+        assertTrue("The expanded body is built", view.bodyCreated())
+    }
+
+    fun `test transcript display collapses and expands the card`() {
+        val tool = completedTool(
+            input = mapOf("questions" to """[{"question":"Q1"}]"""),
+            metadata = mapOf("answers" to """[["A1"]]"""),
+        )
+        val view = QuestionResultView(tool)
+
+        assertTrue(view.syncTranscriptDisplay(TranscriptDisplay(ReasoningDisplay.EXPANDED, question = BlockDisplay.COLLAPSED)))
+        assertFalse("The display setting collapses the card", view.isExpanded())
+        assertTrue("The collapsed chevron must follow the body", icons(view).contains(SessionViewIcons.chevronCollapsed))
+
+        assertTrue(view.syncTranscriptDisplay(TranscriptDisplay(ReasoningDisplay.EXPANDED, question = BlockDisplay.EXPANDED)))
+        assertTrue("The display setting expands the card", view.isExpanded())
+        assertTrue("The expanded chevron must follow the body", icons(view).contains(SessionViewIcons.chevronExpanded))
+    }
+
+    fun `test programmatic open syncs the collapsed chevron`() {
+        val view = QuestionResultView(
+            completedTool(
+                input = mapOf("questions" to """[{"question":"Q1"}]"""),
+                metadata = mapOf("answers" to """[["A1"]]"""),
+            ),
+            display = BlockDisplay.COLLAPSED,
+        )
+        assertTrue(icons(view).contains(SessionViewIcons.chevronCollapsed))
+
+        assertTrue(view.open())
+
+        assertTrue(view.isExpanded())
+        assertTrue("Opening outside toggle must update the chevron", icons(view).contains(SessionViewIcons.chevronExpanded))
+    }
+
     fun `test toggle collapses and expands body`() {
         val tool = completedTool(
             input = mapOf("questions" to """[{"question":"Q1"}]"""),
@@ -124,20 +184,21 @@ class QuestionResultViewTest : BasePlatformTestCase() {
         )
         val view = QuestionResultView(tool)
 
-        assertFalse("Default state should be collapsed", view.isExpanded())
+        view.toggle()
+        assertFalse("Should be collapsed after toggle", view.isExpanded())
 
         view.toggle()
-        assertTrue("Should be expanded after toggle", view.isExpanded())
-
-        view.toggle()
-        assertFalse("Should be collapsed after second toggle", view.isExpanded())
+        assertTrue("Should be expanded after second toggle", view.isExpanded())
     }
 
     fun `test toggle uses right and down chevron icons`() {
-        val view = QuestionResultView(completedTool(
-            input = mapOf("questions" to """[{"question":"Q1"}]"""),
-            metadata = mapOf("answers" to """[["A1"]]"""),
-        ))
+        val view = QuestionResultView(
+            completedTool(
+                input = mapOf("questions" to """[{"question":"Q1"}]"""),
+                metadata = mapOf("answers" to """[["A1"]]"""),
+            ),
+            display = BlockDisplay.COLLAPSED,
+        )
 
         assertTrue(icons(view).contains(SessionViewIcons.chevronCollapsed))
         assertTrue(icons(view).contains(SessionViewIcons.chevronRight))
@@ -152,25 +213,25 @@ class QuestionResultViewTest : BasePlatformTestCase() {
     }
 
     fun `test hover only changes header background`() {
-        val view = QuestionResultView(completedTool(
-            input = mapOf("questions" to """[{"question":"Q1"}]"""),
-            metadata = mapOf("answers" to """[["A1"]]"""),
-        ))
-        val root = view.node(0)
-        val header = root.node(0)
+        val view = QuestionResultView(
+            completedTool(
+                input = mapOf("questions" to """[{"question":"Q1"}]"""),
+                metadata = mapOf("answers" to """[["A1"]]"""),
+            ),
+            display = BlockDisplay.COLLAPSED,
+        )
+        val row = view.node(0)
 
-        assertEquals(0, paint(root.border).alpha)
+        assertNull("collapsed card draws no outline", view.border)
         view.toggle()
-        val body = root.node(1)
 
         view.setHovered(true)
 
-        assertEquals(SessionUiStyle.View.Surface.headerHoverBgColor().rgb, header.background.rgb)
-        assertLine(root.border)
-        assertEquals(SessionUiStyle.View.Outline.brightColor().rgb, paint(body.border).rgb)
+        assertEquals(SessionUiStyle.View.Surface.headerHoverBgColor().rgb, row.background.rgb)
+        assertNull("expanded card draws no outline", view.border)
         view.setHovered(false)
-        assertEquals(SessionUiStyle.View.Surface.headerBgColor().rgb, header.background.rgb)
-        assertLine(root.border)
+        assertEquals(SessionUiStyle.View.Surface.headerBgColor().rgb, row.background.rgb)
+        assertNull("expanded card draws no outline", view.border)
     }
 
     // ------ view factory routing ------
@@ -180,7 +241,7 @@ class QuestionResultViewTest : BasePlatformTestCase() {
             input = mapOf("questions" to """[{"question":"Q1"}]"""),
             metadata = mapOf("answers" to """[["A1"]]"""),
         )
-        val view = ViewFactory.create(tool, {}) {}
+        val view = ViewFactory.create(tool, { _, _ -> }) {}
 
         assertTrue(view is QuestionResultView)
     }
@@ -190,14 +251,14 @@ class QuestionResultViewTest : BasePlatformTestCase() {
             input = emptyMap(),
             metadata = emptyMap(),
         )
-        val view = ViewFactory.create(tool, {}) {}
+        val view = ViewFactory.create(tool, { _, _ -> }) {}
 
         assertTrue(view is ToolView)
     }
 
     fun `test view factory falls back to tool view for running question`() {
         val tool = runningTool("question")
-        val view = ViewFactory.create(tool, {}) {}
+        val view = ViewFactory.create(tool, { _, _ -> }) {}
 
         assertTrue(view is ToolView)
     }
@@ -226,7 +287,6 @@ class QuestionResultViewTest : BasePlatformTestCase() {
         val style = SessionEditorStyle.create(family = "Courier New", size = 22)
 
         view.applyStyle(style)
-        view.toggle()
 
         assertTrue(view.bodyFonts().contains(style.regularFont))
         assertTrue(view.bodyFonts().contains(style.boldFont))
@@ -256,7 +316,7 @@ class QuestionResultViewTest : BasePlatformTestCase() {
             input = mapOf("questions" to """[{"question":"Initial Q"}]"""),
             metadata = mapOf("answers" to """[["Initial A"]]"""),
         )
-        val view = QuestionResultView(initial)
+        val view = QuestionResultView(initial, display = BlockDisplay.COLLAPSED)
 
         val updated = completedTool(
             id = initial.id,
@@ -306,28 +366,6 @@ class QuestionResultViewTest : BasePlatformTestCase() {
             0,
             false,
         ))
-    }
-
-    private fun paint(border: Border): Color {
-        val image = BufferedImage(3, 3, BufferedImage.TYPE_INT_ARGB)
-        val panel = JPanel()
-        val graphics = image.createGraphics()
-        border.paintBorder(panel, graphics, 0, 0, image.width, image.height)
-        graphics.dispose()
-        return Color(image.getRGB(0, 0), true)
-    }
-
-    private fun assertLine(border: Border) {
-        val image = BufferedImage(5, 5, BufferedImage.TYPE_INT_ARGB)
-        val panel = JPanel()
-        val graphics = image.createGraphics()
-        border.paintBorder(panel, graphics, 0, 0, image.width, image.height)
-        graphics.dispose()
-        val rgb = SessionUiStyle.View.Outline.brightColor().rgb
-        assertEquals(rgb, Color(image.getRGB(2, 0), true).rgb)
-        assertEquals(rgb, Color(image.getRGB(0, 2), true).rgb)
-        assertEquals(rgb, Color(image.getRGB(4, 2), true).rgb)
-        assertEquals(rgb, Color(image.getRGB(2, 4), true).rgb)
     }
 
     private fun icons(component: Component): List<Icon> {

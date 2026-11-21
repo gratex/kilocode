@@ -39,6 +39,8 @@ import { dict as amTr } from "../../webview-ui/agent-manager/i18n/tr"
 import { dict as amNl } from "../../webview-ui/agent-manager/i18n/nl"
 import { dict as amUk } from "../../webview-ui/agent-manager/i18n/uk"
 import { dict as amIt } from "../../webview-ui/agent-manager/i18n/it"
+import { dict as amFa } from "../../webview-ui/agent-manager/i18n/fa"
+import { examples } from "../../webview-ui/agent-manager/splash/examples"
 
 const PREFIX = "agentManager."
 
@@ -63,6 +65,7 @@ const locales = {
   nl: amNl,
   uk: amUk,
   it: amIt,
+  fa: amFa,
 }
 
 const appLocales = {
@@ -141,6 +144,31 @@ describe("Agent Manager i18n split", () => {
         expect(localeVars, `placeholder mismatch for ${key} in locale ${locale}`).toEqual(baseVars)
       }
     }
+  })
+
+  it("keeps introduction card captions short in every locale", () => {
+    for (const [locale, dict] of Object.entries(locales)) {
+      expect(dict["agentManager.intro.stage1.text"].length, `${locale}: repository caption`).toBeLessThanOrEqual(100)
+      expect(dict["agentManager.intro.stage3.text"].length, `${locale}: worktree caption`).toBeLessThanOrEqual(80)
+    }
+  })
+
+  it("references the base update command in every introduction locale", () => {
+    for (const [locale, dict] of Object.entries(locales)) {
+      expect(dict["agentManager.intro.updateText"], `${locale}: base update command`).toContain("/update-from-base")
+    }
+  })
+
+  it("resolves splash references in English; locale keysets are checked above", () => {
+    const keys = [
+      ...examples.flatMap((example) => [
+        example.tag,
+        example.title,
+        example.pitch,
+        ...example.features.flatMap((feature) => [feature.name, feature.text]),
+      ]),
+    ]
+    for (const key of keys) expect((amEn as Record<string, string>)[key], `missing English key ${key}`).toBeTruthy()
   })
 
   it("contains required core keys in every locale", () => {

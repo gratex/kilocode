@@ -6,12 +6,18 @@ import ai.kilocode.rpc.dto.KiloAppStatusDto
 import ai.kilocode.rpc.dto.ProfileBalanceDto
 import ai.kilocode.rpc.dto.ProfileDto
 import ai.kilocode.rpc.dto.ProfileOrganizationDto
+import ai.kilocode.rpc.dto.SpeechModelDto
+import ai.kilocode.rpc.dto.SpeechResultDto
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeout
 
 /**
  * Service-level tests for [KiloAppService] profile/login/logout/org operations.
@@ -48,6 +54,95 @@ class KiloAppServiceTest : BasePlatformTestCase() {
         orgs: List<ProfileOrganizationDto> = emptyList(),
         currentOrgId: String? = null,
     ) = ProfileDto(email = email, name = name, organizations = orgs, balance = balance, currentOrgId = currentOrgId)
+
+    private suspend fun waitUntil(done: () -> Boolean) {
+        withTimeout(5_000) {
+            while (!done()) yield()
+        }
+    }
+
+    fun `test transcription selects preferred model and forwards WAV bytes`() = runBlocking(Dispatchers.Default) {
+        rpc.speechModels = listOf(
+            SpeechModelDto("other/model", "Other"),
+            SpeechModelDto("openai/whisper-1", "Whisper"),
+        )
+        rpc.speechResult = SpeechResultDto("dictated prompt")
+
+        val result = app.transcribe("/repo", byteArrayOf(4, 5, 6))
+
+        assertEquals("dictated prompt", result)
+        assertEquals(listOf("/repo", "/repo"), rpc.speechDirectories)
+        val request = rpc.speechRequests.single()
+        assertEquals("openai/whisper-1", request.model)
+        assertEquals("wav", request.format)
+        assertTrue(request.data.contentEquals(byteArrayOf(4, 5, 6)))
+    }
+
+    fun `test transcription caches selected model`() = runBlocking(Dispatchers.Default) {
+        rpc.speechModels = listOf(SpeechModelDto("speech/model", "Speech"))
+
+        app.transcribe("/repo", byteArrayOf(1))
+        app.transcribe("/repo", byteArrayOf(2))
+
+        assertEquals(1, rpc.speechModelCalls)
+        assertEquals(listOf("speech/model", "speech/model"), rpc.speechRequests.map { it.model })
+    }
+
+    fun `test transcription falls back to default model when discovery fails`() = runBlocking(Dispatchers.Default) {
+        rpc.speechModelsError = IllegalStateException("catalog unavailable")
+
+        app.transcribe("/repo", byteArrayOf(1))
+        rpc.speechModelsError = null
+        rpc.speechModels = listOf(SpeechModelDto("speech/allowed", "Allowed"))
+        app.transcribe("/repo", byteArrayOf(2))
+
+        assertEquals(2, rpc.speechModelCalls)
+        assertEquals(listOf("openai/whisper-1", "speech/allowed"), rpc.speechRequests.map { it.model })
+    }
+
+    fun `test transcription model discovery propagates cancellation`() = runBlocking(Dispatchers.Default) {
+        rpc.speechModelsError = CancellationException("cancelled")
+
+        val err = runCatching { app.transcribe("/repo", byteArrayOf(1)) }.exceptionOrNull()
+
+        assertTrue(err is CancellationException)
+        assertTrue(rpc.speechRequests.isEmpty())
+    }
+
+    fun `test fetchCoreInfoAsync dedupes in flight requests`() = runBlocking(Dispatchers.Default) {
+        rpc.cliInfoGate = CompletableDeferred()
+        val seen = mutableListOf<CoreInfo?>()
+
+        app.fetchCoreInfoAsync { seen.add(it) }
+        app.fetchCoreInfoAsync { seen.add(it) }
+        waitUntil { rpc.cliVersionCalls == 1 }
+
+        assertEquals(1, rpc.cliVersionCalls)
+        assertEquals(0, rpc.cliPlatformCalls)
+        rpc.cliInfoGate!!.complete(Unit)
+        waitUntil { seen.size == 2 }
+
+        assertEquals(1, rpc.cliVersionCalls)
+        assertEquals(1, rpc.cliPlatformCalls)
+        assertEquals(listOf(CoreInfo("1.0.0", "darwin-arm64"), CoreInfo("1.0.0", "darwin-arm64")), seen)
+    }
+
+    fun `test fetchCoreInfoAsync retries after failure`() = runBlocking(Dispatchers.Default) {
+        val seen = mutableListOf<CoreInfo?>()
+        rpc.cliInfoError = RuntimeException("core failed")
+
+        app.fetchCoreInfoAsync { seen.add(it) }
+        waitUntil { seen.size == 1 }
+
+        assertNull(seen.single())
+        assertNull(app.core)
+        rpc.cliInfoError = null
+        app.fetchCoreInfoAsync { seen.add(it) }
+        waitUntil { seen.size == 2 }
+
+        assertEquals(CoreInfo("1.0.0", "darwin-arm64"), seen.last())
+        assertEquals(2, rpc.cliVersionCalls)
+    }
 
     // ------ refreshProfile ------
 

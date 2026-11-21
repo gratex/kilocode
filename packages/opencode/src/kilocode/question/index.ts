@@ -3,6 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import * as Log from "@opencode-ai/core/util/log"
 import { SessionID } from "@/session/schema"
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
+import type { Info } from "@/question"
 
 /**
  * Kilo-specific helpers for the shared `@/question` module.
@@ -13,6 +14,22 @@ import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
  */
 export namespace KiloQuestion {
   const log = Log.create({ service: "question" })
+
+  export function normalize(info: Info): Info {
+    const line = (value: string) => value.replace(/\s+/g, (space) => (/[\r\n]/.test(space) ? " " : space)).trim()
+    const text = (value: string) => value.replace(/\r\n/g, "\n").replace(/\r/g, " ")
+    return {
+      ...info,
+      ...(info.default == null ? {} : { default: line(info.default) }),
+      question: text(info.question),
+      header: line(info.header),
+      options: info.options.map((option) => ({
+        ...option,
+        label: line(option.label),
+        description: text(option.description),
+      })),
+    }
+  }
 
   /** Minimal entry shape both helpers need; matches `PendingEntry` in `@/question`. */
   type Entry = {
@@ -60,13 +77,13 @@ export namespace KiloQuestion {
     })
 
   /**
-   * Auto-dismiss when a newer prompt is already queued on this session — a
+   * Auto-dismiss when a newer foreground prompt is already queued on this session — a
    * tool that calls `Question.ask` after the queue event would otherwise block
    * the run while the user waits for their queued prompt to take over.
    */
   export const guardFollowup = <E>(sessionID: SessionID, makeError: () => E) =>
     Effect.gen(function* () {
-      if (!KiloSessionPromptQueue.hasFollowup(sessionID)) return
+      if (!KiloSessionPromptQueue.hasFollowup(sessionID, true)) return
       log.info("auto-dismissed — followup queued", { sessionID })
       return yield* Effect.fail(makeError())
     })

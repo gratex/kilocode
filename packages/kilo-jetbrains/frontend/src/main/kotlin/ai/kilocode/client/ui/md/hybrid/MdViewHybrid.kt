@@ -1,12 +1,27 @@
 package ai.kilocode.client.ui.md.hybrid
 
-import ai.kilocode.client.session.ui.style.SessionEditorStyle
-import ai.kilocode.client.session.ui.selection.SessionSelection
+import ai.kilocode.client.session.ui.SessionSurface
 import ai.kilocode.client.session.ui.selection.SessionCopyTarget
+import ai.kilocode.client.session.ui.selection.SessionSelection
+import ai.kilocode.client.session.ui.style.SessionEditorStyle
 import ai.kilocode.client.session.ui.style.SessionUiStyle
+import ai.kilocode.client.ui.editor.EditorFolds
+import ai.kilocode.client.plugin.KiloBundle
+import ai.kilocode.client.ui.UiStyle
+import ai.kilocode.client.ui.diagram.Fault
+import ai.kilocode.client.ui.diagram.Out
+import ai.kilocode.client.ui.diagram.ui.DiagramBlock
+import ai.kilocode.client.ui.diagram.ui.DiagramPanel
+import ai.kilocode.client.ui.diagram.ui.Diagrams
+import ai.kilocode.client.ui.diagram.ui.diagramPalette
+import ai.kilocode.client.ui.diagram.ui.diagramSpec
+import ai.kilocode.client.ui.diagram.ui.openDiagramWindow
+import ai.kilocode.client.ui.layout.Stack
+import ai.kilocode.client.ui.md.MAX_SEARCH_HIGHLIGHTS
 import ai.kilocode.client.ui.md.MdCodeBlockBorder
 import ai.kilocode.client.ui.md.MdCodeBlockFactory
 import ai.kilocode.client.ui.md.MdCommon
+import ai.kilocode.client.ui.md.MdSearchView
 import ai.kilocode.client.ui.md.MdStyle
 import ai.kilocode.client.ui.md.MdView
 import ai.kilocode.log.KiloLog
@@ -14,41 +29,61 @@ import com.intellij.execution.ui.ConsoleViewContentType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.DataSink
 import com.intellij.openapi.actionSystem.UiDataProvider
+import com.intellij.openapi.components.service
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.colors.EditorColors
+import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.TextRange
+import com.intellij.openapi.util.registry.Registry
+import com.intellij.openapi.util.text.StringUtil
 import com.intellij.ui.components.JBTextArea
 import com.intellij.ui.components.JBHtmlPane
 import com.intellij.ui.components.JBHtmlPaneConfiguration
 import com.intellij.ui.components.JBHtmlPaneStyleConfiguration
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
+import com.intellij.util.concurrency.annotations.RequiresEdt
+import com.intellij.util.ui.ExtendableHTMLViewFactory
 import com.intellij.util.ui.JBUI
-import org.commonmark.ext.autolink.AutolinkExtension
-import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
-import org.commonmark.ext.gfm.tables.TablesExtension
-import org.commonmark.node.AbstractVisitor
-import org.commonmark.node.Block
-import org.commonmark.node.Document
-import org.commonmark.node.FencedCodeBlock
-import org.commonmark.node.IndentedCodeBlock
-import org.commonmark.node.Node
-import org.commonmark.node.ThematicBreak
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
+import com.intellij.util.ui.UIUtil
+import java.awt.BasicStroke
 import java.awt.Color
+import java.awt.Component
+import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.Point
+import java.awt.Rectangle
+import java.awt.RenderingHints
+import java.awt.Shape
+import java.awt.event.HierarchyEvent
+import java.awt.event.MouseAdapter
+import java.awt.event.MouseEvent
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.JViewport
 import javax.swing.ScrollPaneConstants
+import javax.swing.SwingUtilities
+import javax.swing.event.ChangeListener
 import javax.swing.event.HyperlinkEvent
+import javax.swing.text.Document
+import javax.swing.text.Element
+import javax.swing.text.Highlighter
+import javax.swing.text.JTextComponent
+import javax.swing.text.html.InlineView
 import javax.swing.text.html.StyleSheet
+import kotlin.reflect.KProperty
+import javax.swing.text.View as SwingView
 
 @Suppress("UnstableApiUsage")
 internal open class MdViewHybrid(
@@ -64,36 +99,28 @@ internal open class MdViewHybrid(
     private val source = StringBuilder()
     private var style = style
     private var rendered = ""
+    private var htmlCache: HtmlCache? = null
     private var disposed = false
     private val blocks = mutableListOf<View>()
     private var openFence: Fence? = null
     private var stale = false
+    private val projector = MdProjector()
+    private var searchRev = 0L
+    private var nextSearchId = 1
+    private val searchTags = HashMap<Int, MutableList<Any>>()
+    private val searchListeners = mutableListOf<MdSearchView.SearchListener>()
 
-    private val extensions = listOf(
-        AutolinkExtension.create(),
-        TablesExtension.create(),
-        StrikethroughExtension.create(),
-    )
-
-    private val parser: Parser = Parser.builder().extensions(extensions).build()
-
-    private val renderer: HtmlRenderer = HtmlRenderer.builder()
-        .extensions(extensions)
-        .escapeHtml(true)
-        .sanitizeUrls(true)
-        .build()
-
-    private var fontOverride: Font? = null
-    private var foregroundOverride: Color? = null
-    private var backgroundOverride: Color? = null
-    private var linkColorOverride: Color? = null
-    private var codeBgOverride: Color? = null
-    private var preBgOverride: Color? = null
-    private var preFgOverride: Color? = null
-    private var codeFontOverride: String? = null
-    private var quoteBorderOverride: Color? = null
-    private var quoteFgOverride: Color? = null
-    private var tableBorderOverride: Color? = null
+    private val fontOverride = Override { opts().font }
+    private val foregroundOverride = Override { opts().foreground }
+    private val backgroundOverride = Override { opts().background }
+    private val linkColorOverride = Override { opts().linkColor }
+    private val codeBgOverride = Override { opts().codeBg }
+    private val preBgOverride = Override { opts().preBg }
+    private val preFgOverride = Override { opts().preFg }
+    private val codeFontOverride = Override { opts().codeFont }
+    private val quoteBorderOverride = Override { opts().quoteBorder }
+    private val quoteFgOverride = Override { opts().quoteFg }
+    private val tableBorderOverride = Override { opts().tableBorder }
     private var opaqueState = true
 
     private val root = RootPanel().apply {
@@ -104,104 +131,27 @@ internal open class MdViewHybrid(
 
     override val component: JComponent get() = root
 
-    override var font: Font
-        get() = fontOverride ?: opts().font
-        set(value) {
-            if (disposed) return
-            if (fontOverride == value) return
-            fontOverride = value
-            syncStyle()
-        }
+    override var font: Font by fontOverride
 
-    override var foreground: Color
-        get() = foregroundOverride ?: opts().foreground
-        set(value) {
-            if (disposed) return
-            if (foregroundOverride == value) return
-            foregroundOverride = value
-            syncStyle()
-        }
+    override var foreground: Color by foregroundOverride
 
-    override var background: Color
-        get() = backgroundOverride ?: opts().background
-        set(value) {
-            if (disposed) return
-            if (backgroundOverride == value) return
-            backgroundOverride = value
-            syncStyle()
-        }
+    override var background: Color by backgroundOverride
 
-    override var linkColor: Color
-        get() = linkColorOverride ?: opts().linkColor
-        set(value) {
-            if (disposed) return
-            if (linkColorOverride == value) return
-            linkColorOverride = value
-            syncStyle()
-        }
+    override var linkColor: Color by linkColorOverride
 
-    override var codeBg: Color
-        get() = codeBgOverride ?: opts().codeBg
-        set(value) {
-            if (disposed) return
-            if (codeBgOverride == value) return
-            codeBgOverride = value
-            syncStyle()
-        }
+    override var codeBg: Color by codeBgOverride
 
-    override var preBg: Color
-        get() = preBgOverride ?: opts().preBg
-        set(value) {
-            if (disposed) return
-            if (preBgOverride == value) return
-            preBgOverride = value
-            syncStyle()
-        }
+    override var preBg: Color by preBgOverride
 
-    override var preFg: Color
-        get() = preFgOverride ?: opts().preFg
-        set(value) {
-            if (disposed) return
-            if (preFgOverride == value) return
-            preFgOverride = value
-            syncStyle()
-        }
+    override var preFg: Color by preFgOverride
 
-    override var codeFont: String
-        get() = codeFontOverride ?: opts().codeFont
-        set(value) {
-            if (disposed) return
-            if (codeFontOverride == value) return
-            codeFontOverride = value
-            syncStyle()
-        }
+    override var codeFont: String by codeFontOverride
 
-    override var quoteBorder: Color
-        get() = quoteBorderOverride ?: opts().quoteBorder
-        set(value) {
-            if (disposed) return
-            if (quoteBorderOverride == value) return
-            quoteBorderOverride = value
-            syncStyle()
-        }
+    override var quoteBorder: Color by quoteBorderOverride
 
-    override var quoteFg: Color
-        get() = quoteFgOverride ?: opts().quoteFg
-        set(value) {
-            if (disposed) return
-            if (quoteFgOverride == value) return
-            quoteFgOverride = value
-            syncStyle()
-        }
+    override var quoteFg: Color by quoteFgOverride
 
-    override var tableBorder: Color
-        get() = tableBorderOverride ?: opts().tableBorder
-        set(value) {
-            if (disposed) return
-            if (tableBorderOverride == value) return
-            tableBorderOverride = value
-            syncStyle()
-        }
+    override var tableBorder: Color by tableBorderOverride
 
     override var opaque: Boolean
         get() = opaqueState
@@ -215,7 +165,11 @@ internal open class MdViewHybrid(
     override fun applyStyle(style: SessionEditorStyle) {
         if (disposed) return
         this.style = style
-        selection?.applyStyle(style)
+        // Selection colors are a session-wide concern applied once by SessionUi.applyStyle via the
+        // shared SessionSelection. Re-applying them here would re-run setColorsScheme on every editor
+        // registered across the whole transcript each time any single block is styled (a popup build,
+        // an inline expand, a streaming delta), which triggers a full gutter reinit per editor and can
+        // freeze the EDT. This view's own editors are styled by syncStyle() below.
         syncStyle()
     }
 
@@ -229,17 +183,17 @@ internal open class MdViewHybrid(
 
     override fun resetStyles() {
         if (disposed) return
-        fontOverride = null
-        foregroundOverride = null
-        backgroundOverride = null
-        linkColorOverride = null
-        codeBgOverride = null
-        preBgOverride = null
-        preFgOverride = null
-        codeFontOverride = null
-        quoteBorderOverride = null
-        quoteFgOverride = null
-        tableBorderOverride = null
+        fontOverride.clear()
+        foregroundOverride.clear()
+        backgroundOverride.clear()
+        linkColorOverride.clear()
+        codeBgOverride.clear()
+        preBgOverride.clear()
+        preFgOverride.clear()
+        codeFontOverride.clear()
+        quoteBorderOverride.clear()
+        quoteFgOverride.clear()
+        tableBorderOverride.clear()
         opaqueState = true
         syncStyle()
     }
@@ -274,11 +228,13 @@ internal open class MdViewHybrid(
         if (source.isEmpty() && rendered.isEmpty() && root.componentCount == 0) return
         source.clear()
         rendered = ""
+        htmlCache = null
         openFence = null
         stale = false
         clearBlocks()
         root.revalidate()
         root.repaint()
+        searchChanged()
     }
 
     override fun addLinkListener(listener: MdView.LinkListener) {
@@ -290,15 +246,188 @@ internal open class MdViewHybrid(
         listeners.remove(listener)
     }
 
+    override fun searchRevision(): Long = searchRev
+
+    @Suppress("LoopWithTooManyJumpStatements")
+    override fun searchBlocks(): List<MdSearchView.SearchBlock> {
+        if (disposed) return emptyList()
+        val out = ArrayList<MdSearchView.SearchBlock>()
+        for (view in blocks) {
+            val pane = view.searchPane() ?: continue
+            val doc = pane.document
+            val text = doc.getText(0, doc.length)
+            if (text.isEmpty()) continue
+            out.add(Block(view.searchId, pane, text, excluded(doc), searchRev))
+        }
+        return out
+    }
+
+    override fun clearSearchHighlights() {
+        if (searchTags.isEmpty()) return
+        for (view in blocks) {
+            val pane = view.searchPane() ?: continue
+            clearTags(view.searchId, pane)
+        }
+        searchTags.clear()
+    }
+
+    private inner class Block(
+        override val id: Int,
+        override val component: JComponent,
+        override val text: String,
+        override val excluded: List<TextRange>,
+        override val revision: Long,
+    ) : MdSearchView.SearchBlock {
+        private val pane = component as? JTextComponent
+
+        override fun applyHighlights(ranges: List<TextRange>, current: TextRange?) {
+            if (disposed) return
+            val pane = pane ?: return
+            clearTags(id, pane)
+            val normal = painter(false)
+            val active = painter(true)
+            for (range in ranges.take(MAX_SEARCH_HIGHLIGHTS)) addTag(id, pane, range, normal)
+            current?.let { addTag(id, pane, it, active) }
+            pane.repaint()
+        }
+
+        override fun clearHighlights() {
+            pane?.let { clearTags(id, it) }
+        }
+
+        @Suppress("ReturnCount", "MaxLineLength")
+        override fun rect(range: TextRange): Rectangle? {
+            if (disposed) return null
+            val pane = pane ?: return null
+            if (!pane.isShowing) return null
+            val bounds = paneRect(pane, range) ?: return null
+            val point = runCatching { SwingUtilities.convertPoint(pane, bounds.x, bounds.y, root) }.getOrNull()
+                ?: return null
+            return Rectangle(point.x, point.y, bounds.width, bounds.height)
+        }
+
+        override fun scrollIntoView(range: TextRange) {
+            if (disposed) return
+            val pane = pane ?: return
+            paneRect(pane, range)?.let { pane.scrollRectToVisible(it) }
+        }
+    }
+
+    private fun paneRect(pane: JTextComponent, range: TextRange): Rectangle? {
+        val start = runCatching { pane.modelToView2D(range.startOffset)?.bounds }.getOrNull() ?: return null
+        val end = runCatching {
+            pane.modelToView2D((range.endOffset - 1).coerceAtLeast(range.startOffset))?.bounds
+        }.getOrNull() ?: start
+        return start.union(end)
+    }
+
+    override fun addSearchListener(listener: MdSearchView.SearchListener) {
+        if (searchListeners.contains(listener)) return
+        searchListeners.add(listener)
+    }
+
+    override fun removeSearchListener(listener: MdSearchView.SearchListener) {
+        searchListeners.remove(listener)
+    }
+
+    private fun addTag(id: Int, pane: JTextComponent, range: TextRange, painter: Highlighter.HighlightPainter) {
+        val doc = pane.document
+        val start = range.startOffset.coerceIn(0, doc.length)
+        val end = range.endOffset.coerceIn(start, doc.length)
+        if (end <= start) return
+        val tag = runCatching { pane.highlighter.addHighlight(start, end, painter) }.getOrNull() ?: return
+        searchTags.getOrPut(id) { mutableListOf() }.add(tag)
+    }
+
+    private fun clearTags(id: Int, pane: JTextComponent) {
+        val tags = searchTags.remove(id) ?: return
+        for (tag in tags) runCatching { pane.highlighter.removeHighlight(tag) }
+    }
+
+    private fun excluded(doc: Document): List<TextRange> {
+        val out = ArrayList<TextRange>()
+        collectPre(doc.defaultRootElement, out)
+        return out
+    }
+
+    private fun collectPre(element: Element?, out: MutableList<TextRange>) {
+        if (element == null) return
+        if (element.name.equals("pre", ignoreCase = true)) {
+            out.add(TextRange(element.startOffset, element.endOffset))
+            return
+        }
+        for (i in 0 until element.elementCount) collectPre(element.getElement(i), out)
+    }
+
+    private fun painter(current: Boolean): Highlighter.HighlightPainter {
+        val attrs = style.editorScheme.getAttributes(EditorColors.TEXT_SEARCH_RESULT_ATTRIBUTES)
+        val fill = attrs?.backgroundColor
+            ?: style.editorScheme.getColor(EditorColors.SELECTION_BACKGROUND_COLOR)
+            ?: UiStyle.Colors.editorBackground()
+        val caret = style.editorScheme.getColor(EditorColors.CARET_COLOR) ?: UIUtil.getLabelForeground()
+        return SearchPainter(fill, current, caret)
+    }
+
+    private fun searchChanged() {
+        if (disposed) return
+        searchRev++
+        for (listener in searchListeners.toList()) listener.onSearchChanged()
+    }
+
+    @Suppress("MagicNumber")
+    private inner class SearchPainter(
+        private val fill: Color,
+        private val current: Boolean,
+        private val outline: Color,
+    ) : Highlighter.HighlightPainter {
+        override fun paint(g: Graphics, p0: Int, p1: Int, bounds: Shape, c: JTextComponent) {
+            // HTML text views can report line-wide highlight bounds. Draw the actual glyph range so
+            // the rounded background wraps only the matched words.
+            val rect = rangeRect(c, p0, p1) ?: (bounds as? Rectangle) ?: bounds.bounds
+            if (rect.width <= 0 || rect.height <= 0) return
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                val arc = JBUI.scale(3)
+                g2.color = fill
+                g2.fillRoundRect(rect.x, rect.y, rect.width, rect.height, arc, arc)
+                if (current) {
+                    g2.color = outline
+                    g2.stroke = BasicStroke(JBUI.scale(1).toFloat().coerceAtLeast(1f))
+                    val pad = JBUI.scale(1)
+                    g2.drawRoundRect(
+                        rect.x + pad,
+                        rect.y + pad,
+                        (rect.width - pad * 2).coerceAtLeast(1),
+                        (rect.height - pad * 2).coerceAtLeast(1),
+                        arc,
+                        arc,
+                    )
+                }
+            } finally {
+                g2.dispose()
+            }
+        }
+    }
+
+    private fun rangeRect(c: JTextComponent, p0: Int, p1: Int): Rectangle? {
+        val start = runCatching { c.modelToView2D(p0)?.bounds }.getOrNull() ?: return null
+        val end = runCatching { c.modelToView2D((p1 - 1).coerceAtLeast(p0))?.bounds }.getOrNull() ?: start
+        return start.union(end)
+    }
+
     override fun markdown(): String = source.toString()
 
+    override fun markdown(limit: Int): String = source.substring(0, limit.coerceIn(0, source.length))
+
     override fun html(): String {
-        if (!stale) return rendered
-        val out = project(source.toString())
-        rendered = out.html
-        openFence = out.open
-        stale = false
-        return rendered
+        if (stale) {
+            val out = projector.project(source.toString())
+            rendered = out.html
+            openFence = out.open
+            stale = false
+        }
+        return process(rendered, opts())
     }
 
     override fun overrideSheet(): String = MdCommon.rules(opts())
@@ -311,8 +440,11 @@ internal open class MdViewHybrid(
     override fun dispose() {
         disposed = true
         listeners.clear()
+        searchListeners.clear()
+        searchTags.clear()
         source.clear()
         rendered = ""
+        htmlCache = null
         openFence = null
         stale = false
         clearBlocks()
@@ -326,12 +458,13 @@ internal open class MdViewHybrid(
         for (view in blocks) view.style(opts)
         root.revalidate()
         root.repaint()
+        searchChanged()
     }
 
     private fun syncBlocks() {
         if (disposed) return
         val text = source.toString()
-        val out = project(text)
+        val out = projector.project(text)
         rendered = out.html
         openFence = out.open
         stale = false
@@ -341,15 +474,20 @@ internal open class MdViewHybrid(
             clearBlocks()
             root.revalidate()
             root.repaint()
+            searchChanged()
             return
         }
         sync(next)
         root.revalidate()
         root.repaint()
+        searchChanged()
     }
 
     private fun clearBlocks() {
-        blocks.forEach { Disposer.dispose(it.disposable) }
+        blocks.forEach {
+            it.searchPane()?.let { pane -> clearTags(it.searchId, pane) }
+            Disposer.dispose(it.disposable)
+        }
         blocks.clear()
         root.removeAll()
     }
@@ -382,7 +520,10 @@ internal open class MdViewHybrid(
         while (root.componentCount > idx) root.remove(root.componentCount - 1)
         val stale = blocks.drop(start)
         repeat(blocks.size - start) { blocks.removeAt(blocks.lastIndex) }
-        stale.forEach { Disposer.dispose(it.disposable) }
+        stale.forEach {
+            it.searchPane()?.let { pane -> clearTags(it.searchId, pane) }
+            Disposer.dispose(it.disposable)
+        }
     }
 
     private fun addGap() {
@@ -401,120 +542,236 @@ internal open class MdViewHybrid(
         val disposable = Disposer.newDisposable("Markdown block")
         return when (desc) {
             is Desc.Html -> HtmlView(desc, htmlBlock(desc.body, disposable), disposable)
+            is Desc.Table -> TableView(desc, tableBlock(desc.body, disposable), disposable)
             is Desc.Code -> when (val kind = desc.kind) {
-                is Kind.Source -> CodeView(desc, codeBlock(desc.text, kind.file, disposable), disposable)
+                is Kind.Source -> CodeView(desc, codeBlock(desc.text, kind, disposable), disposable)
                 is Kind.Terminal -> TermView(desc, terminalBlock(desc.text, kind, disposable), disposable)
+                is Kind.Diagram -> DiagramView(desc, kind, disposable)
             }
         }
+    }
+
+    // The platform's word-break view returns a null-backed Segment that breaks Swing bidi navigation.
+    // Preserve its near-zero geometry while inheriting InlineView's document-backed text.
+    private class Wrap @RequiresEdt constructor(element: Element) : InlineView(element) {
+        companion object {
+            private const val SPAN = 0.01f
+        }
+
+        override fun paint(g: Graphics?, allocation: Shape?) = Unit
+
+        override fun getMinimumSpan(axis: Int): Float = 0f
+
+        override fun getMaximumSpan(axis: Int): Float = if (axis == X_AXIS) 0f else Int.MAX_VALUE.toFloat()
+
+        override fun getPreferredSpan(axis: Int): Float = if (axis == X_AXIS) SPAN else 0f
+
+        @RequiresEdt
+        override fun setSize(width: Float, height: Float) = super.setSize(0f, 0f)
+
+        override fun breakView(axis: Int, offset: Int, pos: Float, len: Float): SwingView = this
+
+        override fun getBreakWeight(axis: Int, pos: Float, len: Float): Int = ExcellentBreakWeight
     }
 
     private fun htmlBlock(body: String, disposable: Disposable): JBHtmlPane {
         val opts = opts()
         return object : JBHtmlPane(
             JBHtmlPaneStyleConfiguration {
-                enableInlineCodeBackground = true
-                enableCodeBlocksBackground = true
+                enableInlineCodeBackground = false
+                enableCodeBlocksBackground = false
             },
             JBHtmlPaneConfiguration {
                 customStyleSheetProvider { sheet() }
+                extensions(object : ExtendableHTMLViewFactory.Extension {
+                    override fun invoke(element: Element, view: SwingView): SwingView? =
+                        if (element.name.equals("wbr", ignoreCase = true)) Wrap(element) else null
+                })
             },
         ), UiDataProvider {
+            // A stationary pointer over scrolling content must keep this pane's hovered link and
+            // cursor fresh, so we replay a synthetic mouse move whenever the enclosing viewport
+            // scrolls. Only the pane under the pointer subscribes — otherwise every prose block in a
+            // large transcript would run a native pointer query + event dispatch on every scroll tick.
+            private var viewport: JViewport? = null
+            private var listening = false
+            private val scroll = ChangeListener { hover() }
+            private val pointer = object : java.awt.event.MouseAdapter() {
+                override fun mouseEntered(e: MouseEvent) = listen(true)
+                override fun mouseExited(e: MouseEvent) = listen(false)
+            }
+            private val hierarchy = java.awt.event.HierarchyListener { event ->
+                if (event.changeFlags and HierarchyEvent.PARENT_CHANGED.toLong() != 0L) retarget()
+            }
+
+            init {
+                addMouseListener(pointer)
+                addHierarchyListener(hierarchy)
+                Disposer.register(disposable) {
+                    listen(false)
+                    removeMouseListener(pointer)
+                    removeHierarchyListener(hierarchy)
+                }
+            }
+
+            override fun addNotify() {
+                super.addNotify()
+                retarget()
+            }
+
+            override fun removeNotify() {
+                listen(false)
+                viewport = null
+                super.removeNotify()
+            }
+
             override fun uiDataSnapshot(sink: DataSink) {
                 selection?.provideCopy(sink) { document.getText(0, document.length).trim() }
+            }
+
+            // Follow the enclosing viewport as this pane is reparented, keeping any live subscription.
+            private fun retarget() {
+                val next = SwingUtilities.getAncestorOfClass(JViewport::class.java, this) as? JViewport
+                if (viewport === next) return
+                if (listening) viewport?.removeChangeListener(scroll)
+                viewport = next
+                if (listening) viewport?.addChangeListener(scroll)
+            }
+
+            // Track viewport scrolls only while the pointer is over this pane.
+            private fun listen(on: Boolean) {
+                if (listening == on) return
+                listening = on
+                if (on) viewport?.addChangeListener(scroll) else viewport?.removeChangeListener(scroll)
+            }
+
+            private fun hover() {
+                val pt = runCatching { mousePosition }.getOrNull()
+                val event = if (pt == null) {
+                    MouseEvent(this, MouseEvent.MOUSE_EXITED, System.currentTimeMillis(), 0, -1, -1, 0, false, MouseEvent.NOBUTTON)
+                } else {
+                    MouseEvent(this, MouseEvent.MOUSE_MOVED, System.currentTimeMillis(), 0, pt.x, pt.y, 0, false, MouseEvent.NOBUTTON)
+                }
+                dispatchEvent(event)
             }
         }.apply {
             isEditable = false
             isOpaque = opts.opaque
             background = opts.background
-            text = "<html><body>$body</body></html>"
+            text = html(body, opts)
             selection?.register(this, disposable)
             addHyperlinkListener { e ->
                 if (e.eventType != HyperlinkEvent.EventType.ACTIVATED) return@addHyperlinkListener
                 val href = e.description ?: return@addHyperlinkListener
-                val pt = (e.inputEvent as? java.awt.event.MouseEvent)?.point
-                dispatch(MdView.LinkEvent(href, pt))
+                val pt = linkPoint(e) ?: (e.inputEvent as? java.awt.event.MouseEvent)?.point
+                dispatch(MdView.LinkEvent(href, pt, this))
             }
         }
     }
 
-    private fun codeBlock(text: String, file: FileType, disposable: Disposable): JBScrollPane {
+    private fun JBHtmlPane.linkPoint(event: HyperlinkEvent): Point? {
+        val elem = event.sourceElement ?: return null
+        return runCatching {
+            val start = modelToView2D(elem.startOffset)?.bounds ?: return@runCatching null
+            val end = modelToView2D((elem.endOffset - 1).coerceAtLeast(elem.startOffset))?.bounds ?: start
+            val bounds = start.union(end)
+            Point(bounds.x + bounds.width / 2, bounds.y)
+        }.getOrNull()
+    }
+
+    private fun tableBlock(body: String, disposable: Disposable): JBScrollPane {
         val opts = opts()
-        val value = text.trimEnd('\n')
-        fun editor(type: FileType) = CodeField(type, opts, text, false).also { ed ->
-            Disposer.register(disposable) {
-                ed.getEditor(false)?.let(EditorFactory.getInstance()::releaseEditor)
-            }
-            ed.setDisposedWith(disposable)
-            selection?.register(ed, disposable)
+        val inner = htmlBlock(body, disposable)
+        val pane = object : JBScrollPane(inner), SessionCopyTarget {
+            override val copyAnchor: JComponent get() = this
+
+            override fun copyText() = inner.document.getText(0, inner.document.length).trim()
+
+            // Width is pinned to 0 so BoxLayout shrinks the pane to the container while the wide
+            // table scrolls horizontally inside it. Height is derived from the inner pane's current
+            // preferred height on every pass so it is correct once the html view is realized
+            // (a static measurement taken before layout is too small and crops the table).
+            override fun getPreferredSize() = Dimension(0, tableHeight(this, inner))
+
+            override fun getMinimumSize() = Dimension(0, tableHeight(this, inner))
+
+            override fun getMaximumSize() = Dimension(Int.MAX_VALUE, tableHeight(this, inner))
         }
+        styleTablePane(pane, opts)
+        return pane
+    }
+
+    private fun codeBlock(text: String, kind: Kind.Source, disposable: Disposable): JBScrollPane {
+        val opts = opts()
+        val value = sourceText(text, kind)
         val field = runCatching {
-            editor(file)
+            codeField(kind.file, opts, value, false, disposable)
         }.getOrElse { err ->
             LOG.warn("kind=markdown codeEditor=true failed message=${err.message}", err)
             if (code.opts.editorOnly) runCatching {
-                editor(PlainTextFileType.INSTANCE)
+                codeField(PlainTextFileType.INSTANCE, opts, value, false, disposable)
             }.getOrElse { fallback ->
                 LOG.warn("kind=markdown codeEditor=true fallback=plain failed message=${fallback.message}", fallback)
                 throw fallback
             } else {
-                textArea(text, opts, disposable)
+                textArea(value, opts, disposable)
             }
         }
-        sizeCodeField(field, value)
-        val pane = object : JBScrollPane(field), SessionCopyTarget {
+        val label = code.opts.fold?.invoke(value)
+        if (label == null || field !is CodeField) {
+            sizeCodeField(field, value)
+            val pane = object : CodePane(field), SessionCopyTarget {
+                override val copyAnchor: JComponent get() = this
+
+                override fun copyText() = fieldText(field)
+            }
+            styleCodePane(pane, opts)
+            sizeCodePane(pane, field)
+            return pane
+        }
+        // A foldable block leaves its field unpinned so the editor's own preferred height tracks
+        // the fold, and the pane measures itself from that on every pass.
+        val pane = object : FoldPane(field), SessionCopyTarget {
             override val copyAnchor: JComponent get() = this
 
-            override fun copyText() = when (field) {
-                is CodeField -> field.text
-                is JBTextArea -> field.text
-                else -> ""
-            }
-
-            override fun doLayout() {
-                super.doLayout()
-                if (code.opts.verticalPolicy != ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER) return
-                val view = viewport.view ?: return
-                val size = viewport.extentSize
-                if (size.height <= 0 || view.height == size.height) return
-                view.setSize(view.width.coerceAtLeast(size.width), size.height)
-            }
+            override fun copyText() = fieldText(field)
         }
         styleCodePane(pane, opts)
-        sizeCodePane(pane, field)
+        // A fold changes the block's height and what it draws, so re-measure and repaint the whole
+        // markdown root, the same way every other block size change in this view does.
+        field.fold(label) {
+            root.revalidate()
+            root.repaint()
+        }
         return pane
+    }
+
+    private fun sourceText(text: String, kind: Kind.Source): String {
+        val value = StringUtil.convertLineSeparators(text).trimEnd('\n')
+        if (kind.highlight == Highlight.DiffPure) return MdDiffHighlight.display(value).text
+        return value
     }
 
     private fun terminalBlock(text: String, kind: Kind.Terminal, disposable: Disposable): JBScrollPane {
         val opts = opts()
         val term = MdTerminal.decode(text, kind.stream)
         val value = shellDisplay(term, kind.mode)
-        val field = CodeField(PlainTextFileType.INSTANCE, opts, value.text, false).also { ed ->
-            Disposer.register(disposable) {
-                ed.getEditor(false)?.let(EditorFactory.getInstance()::releaseEditor)
-            }
-            ed.setDisposedWith(disposable)
-            selection?.register(ed, disposable)
-        }
+        val field = codeField(PlainTextFileType.INSTANCE, opts, value.text, false, disposable)
         sizeCodeField(field, value.text)
-        val pane = object : JBScrollPane(field), SessionCopyTarget {
+        val pane = object : CodePane(field), SessionCopyTarget {
             override val copyAnchor: JComponent get() = this
 
             override fun copyText() = field.text
-
-            override fun doLayout() {
-                super.doLayout()
-                if (code.opts.verticalPolicy != ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER) return
-                val view = viewport.view ?: return
-                val size = viewport.extentSize
-                if (size.height <= 0 || view.height == size.height) return
-                view.setSize(view.width.coerceAtLeast(size.width), size.height)
-            }
         }
         styleCodePane(pane, opts)
         sizeCodePane(pane, field)
         applyTerm(field, term, kind.mode, value)
         return pane
     }
+
+    private fun palette(opts: MdStyle) = diagramPalette(style, opts)
+
+    private fun spec() = diagramSpec(style)
 
     private fun styleCodePane(pane: JBScrollPane, opts: MdStyle) {
         pane.apply {
@@ -523,21 +780,23 @@ internal open class MdViewHybrid(
                 MdCodeBlockBorder.All -> JBUI.Borders.customLine(opts.codeBorder, width)
                 MdCodeBlockBorder.Horizontal -> JBUI.Borders.customLine(opts.codeBorder, width, 0, width, 0)
                 MdCodeBlockBorder.Bottom -> JBUI.Borders.customLine(opts.codeBorder, 0, 0, width, 0)
+                MdCodeBlockBorder.None -> JBUI.Borders.empty()
             }
             viewportBorder = JBUI.Borders.empty(
                 SessionUiStyle.View.Code.topPadding(),
-                SessionUiStyle.View.Code.VIEWPORT_HORIZONTAL_PADDING,
+                code.opts.horizontalPadding,
                 SessionUiStyle.View.Code.VIEWPORT_BOTTOM_PADDING,
-                SessionUiStyle.View.Code.VIEWPORT_HORIZONTAL_PADDING,
+                code.opts.horizontalPadding,
             )
-            isOpaque = true
+            // CodePane paints its own (optionally rounded) fill, so the pane stays non-opaque; the
+            // viewport still fills the inner rectangle with the surface color.
             background = opts.preBg
             viewport.isOpaque = true
             viewport.background = opts.preBg
             horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
             verticalScrollBarPolicy = code.opts.verticalPolicy
             isWheelScrollingEnabled = true
-            setOverlappingScrollBar(false)
+            setOverlappingScrollBar(code.opts.overlapScrollbar)
             horizontalScrollBar.preferredSize = Dimension(0, JBUI.scale(SessionUiStyle.View.Code.SCROLLBAR_HEIGHT))
             horizontalScrollBar.isOpaque = true
             if (code.opts.verticalPolicy == ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER) {
@@ -546,8 +805,39 @@ internal open class MdViewHybrid(
         }
     }
 
+    private fun codeField(file: FileType, opts: MdStyle, text: String, soft: Boolean, disposable: Disposable) =
+        CodeField(file, opts, text, soft).also { ed ->
+            Disposer.register(disposable) {
+                ed.getEditor(false)?.let(EditorFactory.getInstance()::releaseEditor)
+            }
+            ed.setDisposedWith(disposable)
+            selection?.register(ed, disposable)
+        }
+
+    private fun applyEditorChrome(ed: EditorEx, opts: MdStyle, soft: Boolean) {
+        style.applyToEditor(ed)
+        ed.setBorder(JBUI.Borders.empty())
+        ed.scrollPane.border = JBUI.Borders.empty()
+        ed.scrollPane.viewportBorder = JBUI.Borders.empty()
+        ed.backgroundColor = opts.preBg
+        ed.scrollPane.background = opts.preBg
+        ed.scrollPane.isOpaque = true
+        ed.scrollPane.viewport.isOpaque = true
+        ed.scrollPane.viewport.background = opts.preBg
+        ed.settings.isUseSoftWraps = soft
+        ed.settings.isAdditionalPageAtBottom = false
+        ed.scrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
+        ed.scrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
+    }
+
+    private fun fieldText(component: Component): String = when (component) {
+        is CodeField -> component.text
+        is JBTextArea -> component.text
+        else -> ""
+    }
+
     private fun sizeCodeField(component: JComponent, text: String) {
-        val height = codeHeight(component, text)
+        val height = codeHeight(component, text, null)
         val width = codeWidth(component, text)
         component.preferredSize = Dimension(width, height)
         component.minimumSize = Dimension(0, height)
@@ -556,17 +846,39 @@ internal open class MdViewHybrid(
 
     private fun sizeCodePane(pane: JBScrollPane, component: JComponent) {
         val pad = pane.viewportBorder.getBorderInsets(pane)
-        val text = when (component) {
-            is CodeField -> component.text
-            is JBTextArea -> component.text
-            else -> ""
-        }
-        val content = visibleCodeHeight(component, text)
-        val height = content + pane.insets.top + pane.insets.bottom +
-            pad.top + pad.bottom + pane.horizontalScrollBar.preferredSize.height
+        val text = fieldText(component)
+        val content = codeHeight(component, text, code.opts.maxLines)
+        // An overlapping scrollbar floats over the content, so it reserves no bottom band; only add
+        // the scrollbar height when it takes its own row beneath the content.
+        val scrollbar = if (code.opts.overlapScrollbar) 0 else pane.horizontalScrollBar.preferredSize.height
+        val height = content + pane.insets.top + pane.insets.bottom + pad.top + pad.bottom + scrollbar
         pane.preferredSize = Dimension(0, height)
         pane.minimumSize = Dimension(0, height)
         pane.maximumSize = Dimension(Int.MAX_VALUE, height)
+    }
+
+    private fun styleTablePane(pane: JBScrollPane, opts: MdStyle) {
+        pane.apply {
+            border = JBUI.Borders.empty()
+            viewportBorder = JBUI.Borders.empty()
+            isOpaque = opts.opaque
+            background = opts.background
+            viewport.isOpaque = opts.opaque
+            viewport.background = opts.background
+            horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_AS_NEEDED
+            verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
+            isWheelScrollingEnabled = true
+            setOverlappingScrollBar(false)
+            horizontalScrollBar.preferredSize = Dimension(0, JBUI.scale(SessionUiStyle.View.Code.SCROLLBAR_HEIGHT))
+            horizontalScrollBar.isOpaque = opts.opaque
+            verticalScrollBar.preferredSize = JBUI.emptySize()
+        }
+    }
+
+    private fun tableHeight(pane: JBScrollPane, inner: JComponent): Int {
+        val pad = pane.viewportBorder?.getBorderInsets(pane) ?: JBUI.emptyInsets()
+        return inner.preferredSize.height + pane.insets.top + pane.insets.bottom +
+            pad.top + pad.bottom + pane.horizontalScrollBar.preferredSize.height
     }
 
     private fun codeWidth(component: JComponent, text: String): Int {
@@ -575,30 +887,17 @@ internal open class MdViewHybrid(
         return width + JBUI.scale(SessionUiStyle.View.Code.WIDTH_PADDING)
     }
 
-    private fun codeHeight(component: JComponent, text: String): Int {
+    private fun codeHeight(component: JComponent, text: String, max: Int?): Int {
         val count = text.lineSequence().count()
-        val rows = count.coerceAtLeast(SessionUiStyle.View.Code.MIN_ROWS)
+        val base = count.coerceAtLeast(SessionUiStyle.View.Code.MIN_ROWS)
+        val rows = max?.let { base.coerceAtMost(it) } ?: base
         val field = component as? CodeField
         if (field != null) {
             field.ensureWillComputePreferredSize()
             val ed = field.getEditor(false)
             val line = ed?.lineHeight ?: component.getFontMetrics(component.font).height
+            if (max != null) return line * rows
             return maxOf(field.preferredSize.height, line * rows)
-        }
-        val line = component.getFontMetrics(component.font).height
-        return line * rows
-    }
-
-    private fun visibleCodeHeight(component: JComponent, text: String): Int {
-        val max = code.opts.maxLines ?: return component.preferredSize.height
-        val count = text.lineSequence().count()
-        val rows = count.coerceAtLeast(SessionUiStyle.View.Code.MIN_ROWS).coerceAtMost(max)
-        val field = component as? CodeField
-        if (field != null) {
-            field.ensureWillComputePreferredSize()
-            val ed = field.getEditor(false)
-            val line = ed?.lineHeight ?: component.getFontMetrics(component.font).height
-            return line * rows
         }
         val line = component.getFontMetrics(component.font).height
         return line * rows
@@ -641,32 +940,108 @@ internal open class MdViewHybrid(
         init {
             setFontInheritedFromLAF(false)
             font = style.editorFont
-            addSettingsProvider { ed ->
-                style.applyToEditor(ed)
-                ed.setBorder(JBUI.Borders.empty())
-                ed.scrollPane.border = JBUI.Borders.empty()
-                ed.scrollPane.viewportBorder = JBUI.Borders.empty()
-                ed.backgroundColor = opts.preBg
-                ed.scrollPane.background = opts.preBg
-                ed.scrollPane.isOpaque = true
-                ed.scrollPane.viewport.isOpaque = true
-                ed.scrollPane.viewport.background = opts.preBg
-                ed.settings.isUseSoftWraps = soft
-                ed.settings.isAdditionalPageAtBottom = false
-                ed.scrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                ed.scrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-            }
+            addSettingsProvider { ed -> applyEditorChrome(ed, opts, soft) }
         }
 
         override fun uiDataSnapshot(sink: DataSink) {
             super.uiDataSnapshot(sink)
             selection?.provideCopy(sink) { text }
         }
+
+        /**
+         * Renders the whole block folded behind [label], reusing the prompt input's fold controller
+         * so the transcript gives the same interaction: click the placeholder to unfold, fold back
+         * from the gutter handle, and no gutter at all once nothing is folded.
+         */
+        fun fold(label: String, resize: () -> Unit) {
+            val folds = EditorFolds(live = { getEditor(false) }, resize = resize)
+            addSettingsProvider { ed ->
+                folds.install(ed)
+                if (ed.foldingModel.allFoldRegions.isEmpty()) folds.fold(ed, 0, ed.document.textLength, label)
+            }
+        }
+    }
+
+    /**
+     * A code pane whose height follows the editor's folded state instead of the document's line
+     * count, so a folded block occupies one line and an unfolded one grows back to the cap.
+     */
+    private open inner class FoldPane(private val field: CodeField) : CodePane(field) {
+        override fun getPreferredSize() = Dimension(0, foldHeight(this, field))
+
+        override fun getMinimumSize() = Dimension(0, foldHeight(this, field))
+
+        override fun getMaximumSize() = Dimension(Int.MAX_VALUE, foldHeight(this, field))
+    }
+
+    private fun foldHeight(pane: JBScrollPane, field: CodeField): Int {
+        val pad = pane.viewportBorder?.getBorderInsets(pane) ?: JBUI.emptyInsets()
+        val ed = field.getEditor(false)
+        val line = ed?.lineHeight ?: field.getFontMetrics(field.font).height
+        // Visual lines collapse to one while folded, which document line count cannot express.
+        val rows = ed?.let { it.offsetToVisualLine(it.document.textLength, true) + 1 }
+            ?: field.text.lineSequence().count()
+        val capped = code.opts.maxLines?.let { rows.coerceAtMost(it) } ?: rows
+        val scrollbar = if (code.opts.overlapScrollbar) 0 else pane.horizontalScrollBar.preferredSize.height
+        return line * capped.coerceAtLeast(SessionUiStyle.View.Code.MIN_ROWS) +
+            pane.insets.top + pane.insets.bottom + pad.top + pad.bottom + scrollbar
     }
 
     private inner class RootPanel : JPanel(), UiDataProvider {
         override fun uiDataSnapshot(sink: DataSink) {
             selection?.provideCopy(sink) { markdown() }
+        }
+    }
+
+    private open inner class CodePane(component: JComponent) : JBScrollPane(component) {
+        // Non-opaque so the surface can round its corners over the backdrop; the fill is painted
+        // below. Bodies that draw their own edge separators (a non-None border, e.g. tool diffs)
+        // keep square corners.
+        override fun isOpaque(): Boolean = false
+
+        override fun paintComponent(g: Graphics) {
+            val g2 = g.create() as Graphics2D
+            try {
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                g2.color = background
+                val arc = if (code.opts.border == MdCodeBlockBorder.None) JBUI.scale(SessionUiStyle.View.BLOCK_ARC) else 0
+                if (arc > 0) g2.fillRoundRect(0, 0, width, height, arc, arc) else g2.fillRect(0, 0, width, height)
+            } finally {
+                g2.dispose()
+            }
+            super.paintComponent(g)
+        }
+
+        override fun paintChildren(g: Graphics) {
+            if (code.opts.border != MdCodeBlockBorder.None) return super.paintChildren(g)
+            SessionSurface.clipped(g, width, height) { super.paintChildren(it) }
+        }
+
+        override fun doLayout() {
+            super.doLayout()
+            if (code.opts.verticalPolicy != ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER) return
+            val view = viewport.view ?: return
+            val size = viewport.extentSize
+            if (size.height <= 0 || view.height == size.height) return
+            view.setSize(view.width.coerceAtLeast(size.width), size.height)
+        }
+    }
+
+    private inner class Override<T>(private val base: () -> T) {
+        var value: T? = null
+            private set
+
+        operator fun getValue(ref: Any?, property: KProperty<*>): T = value ?: base()
+
+        operator fun setValue(ref: Any?, property: KProperty<*>, next: T) {
+            if (disposed) return
+            if (value == next) return
+            value = next
+            syncStyle()
+        }
+
+        fun clear() {
+            value = null
         }
     }
 
@@ -712,19 +1087,7 @@ internal open class MdViewHybrid(
 
     private fun applyShell(field: CodeField, display: ShellDisplay) {
         val editor = field.getEditor(false) ?: return
-        val size = editor.document.textLength
-        for (range in display.ranges) {
-            val start = range.start.coerceAtMost(size)
-            val end = range.end.coerceAtMost(size)
-            if (start >= end) continue
-            editor.markupModel.addRangeHighlighter(
-                range.key,
-                start,
-                end,
-                HighlighterLayer.SYNTAX + 1,
-                HighlighterTargetArea.EXACT_RANGE,
-            )
-        }
+        MdShellHighlight.apply(editor, display)
     }
 
     private fun dispatch(event: MdView.LinkEvent) {
@@ -746,189 +1109,57 @@ internal open class MdViewHybrid(
     private fun opts(): MdStyle {
         val base = MdCommon.defaults(style)
         return base.copy(
-            font = fontOverride ?: base.font,
-            foreground = foregroundOverride ?: base.foreground,
-            background = backgroundOverride ?: base.background,
-            linkColor = linkColorOverride ?: base.linkColor,
-            codeBg = codeBgOverride ?: base.codeBg,
-            preBg = preBgOverride ?: base.preBg,
-            preFg = preFgOverride ?: base.preFg,
-            codeFont = codeFontOverride ?: base.codeFont,
-            quoteBorder = quoteBorderOverride ?: base.quoteBorder,
-            quoteFg = quoteFgOverride ?: base.quoteFg,
-            tableBorder = tableBorderOverride ?: base.tableBorder,
+            font = fontOverride.value ?: base.font,
+            foreground = foregroundOverride.value ?: base.foreground,
+            background = backgroundOverride.value ?: base.background,
+            linkColor = linkColorOverride.value ?: base.linkColor,
+            codeBg = codeBgOverride.value ?: base.codeBg,
+            preBg = preBgOverride.value ?: base.preBg,
+            preFg = preFgOverride.value ?: base.preFg,
+            codeFont = codeFontOverride.value ?: base.codeFont,
+            quoteBorder = quoteBorderOverride.value ?: base.quoteBorder,
+            quoteFg = quoteFgOverride.value ?: base.quoteFg,
+            tableBorder = tableBorderOverride.value ?: base.tableBorder,
             opaque = opaqueState,
         )
     }
 
-    private fun collect(doc: Node): List<Desc> {
-        val visitor = Visitor()
-        doc.accept(visitor)
-        return visitor.blocks
+    private fun html(body: String, opts: MdStyle): String = "<html><body>${process(body, opts)}</body></html>"
+
+    private fun process(body: String, opts: MdStyle): String {
+        val color = opts.inlineCodeFg.rgb
+        val cached = htmlCache
+        if (cached != null && cached.body == body && cached.color == color) return cached.html
+        val html = MdCommon.inlineCode(body, opts)
+        htmlCache = HtmlCache(body, color, html)
+        return html
     }
 
-    private fun project(text: String): Projection {
-        val blocks = mutableListOf<Desc>()
-        val html = StringBuilder()
-        val md = StringBuilder()
-        val lines = lines(text)
-        var trailing: Fence? = null
-        var idx = 0
-
-        fun flush() {
-            if (md.isEmpty()) return
-            val doc = parser.parse(md.toString())
-            val descs = collect(doc)
-            blocks.addAll(descs)
-            for (desc in descs) {
-                when (desc) {
-                    is Desc.Html -> html.append(desc.body)
-                    is Desc.Code -> html.append(codeHtml(desc.text))
-                }
-            }
-            md.clear()
-        }
-
-        while (idx < lines.size) {
-            val line = lines[idx]
-            val open = opener(line.text)
-            if (open == null) {
-                val pending = idx == lines.lastIndex && pendingOpener(line.text)
-                if (pending) {
-                    flush()
-                    blocks.add(Desc.Code("", Kind.Source(PlainTextFileType.INSTANCE)))
-                    html.append(codeHtml(""))
-                } else {
-                    md.append(line.text).append(line.end)
-                }
-                idx++
-                continue
-            }
-
-            flush()
-            idx++
-            val code = StringBuilder()
-            var closed = false
-            var trimmed = false
-            while (idx < lines.size) {
-                val item = lines[idx]
-                val close = closer(item.text, open)
-                if (close) {
-                    closed = true
-                    idx++
-                    break
-                }
-                val partial = idx == lines.lastIndex && partialCloser(item.text, open)
-                if (partial) trimmed = true
-                if (!partial) code.append(item.text).append(item.end)
-                idx++
-            }
-            val desc = Desc.Code(code.toString(), MdLanguage.kind(open.info))
-            blocks.add(desc)
-            html.append(codeHtml(desc.text))
-            trailing = if (!closed && !trimmed) open else null
-        }
-
-        flush()
-        return Projection(html.toString(), blocks, trailing)
-    }
-
-    private fun lines(text: String): List<Line> {
-        if (text.isEmpty()) return emptyList()
-        val lines = mutableListOf<Line>()
-        var start = 0
-        while (start < text.length) {
-            val end = text.indexOf('\n', start)
-            if (end == -1) {
-                lines.add(Line(text.substring(start), ""))
-                break
-            }
-            lines.add(Line(text.substring(start, end), "\n"))
-            start = end + 1
-        }
-        return lines
-    }
-
-    private fun opener(text: String): Fence? {
-        val trimmed = text.dropWhile { it == ' ' }
-        val indent = text.length - trimmed.length
-        if (indent > 3) return null
-        val char = trimmed.firstOrNull() ?: return null
-        if (char != '`' && char != '~') return null
-        val size = trimmed.takeWhile { it == char }.length
-        if (size < 3) return null
-        val info = trimmed.drop(size).trim()
-        if (char == '`' && info.contains('`')) return null
-        return Fence(char, size, info)
-    }
-
-    private fun closer(text: String, fence: Fence): Boolean {
-        val trimmed = text.dropWhile { it == ' ' }
-        val indent = text.length - trimmed.length
-        if (indent > 3) return false
-        val size = trimmed.takeWhile { it == fence.char }.length
-        if (size < fence.size) return false
-        return trimmed.drop(size).isBlank()
-    }
-
-    private fun pendingOpener(text: String): Boolean {
-        val trimmed = text.dropWhile { it == ' ' }
-        val indent = text.length - trimmed.length
-        if (indent > 3) return false
-        val char = trimmed.firstOrNull() ?: return false
-        if (char != '`' && char != '~') return false
-        val size = trimmed.takeWhile { it == char }.length
-        if (size !in 1..2) return false
-        return trimmed.drop(size).isBlank()
-    }
-
-    private fun partialCloser(text: String, fence: Fence): Boolean {
-        val trimmed = text.dropWhile { it == ' ' }
-        val indent = text.length - trimmed.length
-        if (indent > 3) return false
-        val size = trimmed.takeWhile { it == fence.char }.length
-        if (size !in 1 until fence.size) return false
-        return trimmed.drop(size).isBlank()
-    }
-
-    private fun codeHtml(text: String): String = "<pre><code>${escape(text)}</code></pre>\n"
-
-    private fun escape(text: String): String = text
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-
-    private sealed class Desc {
-        data class Html(val body: String) : Desc()
-        data class Code(val text: String, val kind: Kind) : Desc()
-    }
-
-    private data class Projection(val html: String, val blocks: List<Desc>, val open: Fence?)
-
-    private data class Line(val text: String, val end: String)
-
-    private data class Fence(val char: Char, val size: Int, val info: String)
+    private data class HtmlCache(val body: String, val color: Int, val html: String)
 
     private abstract inner class View(
         var desc: Desc,
         val component: JComponent,
         val disposable: Disposable,
     ) {
+        val searchId: Int = nextSearchId++
         abstract fun compatible(desc: Desc): Boolean
         abstract fun update(desc: Desc)
         abstract fun style(opts: MdStyle)
         open fun grow(delta: String) = Unit
+        open fun searchPane(): JBHtmlPane? = null
     }
 
     private inner class HtmlView(desc: Desc.Html, private val pane: JBHtmlPane, disposable: Disposable) :
         View(desc, pane, disposable) {
+        override fun searchPane(): JBHtmlPane = pane
+
         override fun compatible(desc: Desc) = desc is Desc.Html
 
         override fun update(desc: Desc) {
             if (this.desc == desc) return
             this.desc = desc
-            pane.text = "<html><body>${(desc as Desc.Html).body}</body></html>"
+            pane.text = html((desc as Desc.Html).body, opts())
         }
 
         override fun style(opts: MdStyle) {
@@ -936,18 +1167,49 @@ internal open class MdViewHybrid(
             pane.background = opts.background
             pane.reloadCssStylesheets()
             val item = desc as Desc.Html
-            pane.text = "<html><body>${item.body}</body></html>"
+            pane.text = html(item.body, opts)
+        }
+    }
+
+    private inner class TableView(desc: Desc.Table, private val pane: JBScrollPane, disposable: Disposable) :
+        View(desc, pane, disposable) {
+        override fun searchPane(): JBHtmlPane? = pane.viewport.view as? JBHtmlPane
+
+        override fun compatible(desc: Desc) = desc is Desc.Table
+
+        override fun update(desc: Desc) {
+            if (this.desc == desc) return
+            this.desc = desc
+            val inner = pane.viewport.view as? JBHtmlPane ?: return
+            inner.text = html((desc as Desc.Table).body, opts())
+            pane.revalidate()
+        }
+
+        override fun style(opts: MdStyle) {
+            styleTablePane(pane, opts)
+            val inner = pane.viewport.view as? JBHtmlPane ?: return
+            inner.isOpaque = opts.opaque
+            inner.background = opts.background
+            inner.reloadCssStylesheets()
+            inner.text = html((desc as Desc.Table).body, opts)
+            pane.revalidate()
         }
     }
 
     private inner class CodeView(desc: Desc.Code, private val pane: JBScrollPane, disposable: Disposable) :
         View(desc, pane, disposable) {
+        init {
+            overlay()
+        }
+
         override fun compatible(desc: Desc) = desc is Desc.Code && (this.desc as Desc.Code).kind == desc.kind
 
         override fun update(desc: Desc) {
             if (this.desc == desc) return
             this.desc = desc
-            val value = (desc as Desc.Code).text.trimEnd('\n')
+            val item = desc as Desc.Code
+            val kind = item.kind as? Kind.Source
+            val value = if (kind == null) item.text.trimEnd('\n') else sourceText(item.text, kind)
             val view = pane.viewport.view
             when (view) {
                 is CodeField -> view.text = value
@@ -957,22 +1219,25 @@ internal open class MdViewHybrid(
                 sizeCodeField(view, value)
                 sizeCodePane(pane, view)
             }
+            overlay()
+        }
+
+        /** Applies unified-diff coloring on top of a `diff`/`patch` block; a no-op otherwise. */
+        private fun overlay() {
+            val kind = (desc as Desc.Code).kind
+            if (kind !is Kind.Source || kind.highlight == Highlight.None) return
+            val field = pane.viewport.view as? CodeField ?: return
+            val editor = field.getEditor(true) ?: return
+            if (kind.highlight == Highlight.DiffPure) {
+                MdDiffHighlight.applyPure(editor, (desc as Desc.Code).text.trimEnd('\n'))
+                return
+            }
+            MdDiffHighlight.apply(editor, field.text)
         }
 
         override fun grow(delta: String) {
             val item = desc as Desc.Code
-            val next = item.copy(text = item.text + delta)
-            desc = next
-            val value = next.text.trimEnd('\n')
-            val view = pane.viewport.view
-            when (view) {
-                is CodeField -> view.text = value
-                is JBTextArea -> view.text = value
-            }
-            if (view is JComponent) {
-                sizeCodeField(view, value)
-                sizeCodePane(pane, view)
-            }
+            update(item.copy(text = item.text + delta))
         }
 
         override fun style(opts: MdStyle) {
@@ -982,31 +1247,176 @@ internal open class MdViewHybrid(
                 is CodeField -> {
                     view.font = style.editorFont
                     view.background = opts.preBg
-                    view.getEditor(false)?.let { ed ->
-                        style.applyToEditor(ed)
-                        ed.setBorder(JBUI.Borders.empty())
-                        ed.scrollPane.border = JBUI.Borders.empty()
-                        ed.scrollPane.viewportBorder = JBUI.Borders.empty()
-                        ed.backgroundColor = opts.preBg
-                        ed.scrollPane.background = opts.preBg
-                        ed.scrollPane.isOpaque = true
-                        ed.scrollPane.viewport.isOpaque = true
-                        ed.scrollPane.viewport.background = opts.preBg
-                        ed.settings.isUseSoftWraps = view.soft
-                        ed.scrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                        ed.scrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-                    }
+                    view.getEditor(false)?.let { ed -> applyEditorChrome(ed, opts, view.soft) }
                 }
                 is JBTextArea -> styleTextArea(view, opts)
             }
             if (view is JComponent) {
-                val text = when (view) {
-                    is CodeField -> view.text
-                    is JBTextArea -> view.text
-                    else -> ""
-                }
+                val text = fieldText(view)
                 sizeCodeField(view, text)
                 sizeCodePane(pane, view)
+            }
+            overlay()
+        }
+    }
+
+    private inner class DiagramView(desc: Desc.Code, kind: Kind.Diagram, disposable: Disposable) :
+        View(desc, DiagramBlock(), disposable) {
+        private val root = component as DiagramBlock
+        private val codePane = codeBlock(desc.text, Kind.Source(kind.file), disposable)
+        private val panel = DiagramPanel(palette(opts()))
+        private val label = JBLabel(KiloBundle.message("diagram.rendering")).apply {
+            foreground = SessionUiStyle.Text.Secondary.foreground()
+        }
+        private var hash = 0
+        private var gen = 0
+        private var font = spec().font
+        private val click = object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                if (e.button != MouseEvent.BUTTON1 || e.clickCount != 1) return
+                if (!panel.isVisible) return
+                openDiagramWindow(panel, (this@DiagramView.desc as Desc.Code).text)
+            }
+        }
+
+        init {
+            panel.background = opts().preBg
+            panel.isVisible = false
+            panel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            panel.toolTipText = KiloBundle.message("diagram.viewer.hint")
+            panel.addMouseListener(click)
+            panel.onFault = { fail(KiloBundle.message("diagram.paint")) }
+            Disposer.register(disposable) { panel.removeMouseListener(click) }
+            root.next(panel).next(codePane).next(label)
+            root.text = { (this.desc as Desc.Code).text }
+            // Only offer the picture while the rendered diagram is the thing on screen, so copying the
+            // streaming or failed source still copies that source.
+            root.image = { panel.takeIf { it.isVisible }?.image() }
+            kick()
+        }
+
+        override fun compatible(desc: Desc) = desc is Desc.Code && desc.kind is Kind.Diagram
+
+        override fun update(desc: Desc) {
+            if (this.desc == desc) return
+            this.desc = desc
+            updateCode((desc as Desc.Code).text)
+            kick()
+        }
+
+        override fun grow(delta: String) {
+            val item = desc as Desc.Code
+            update(item.copy(text = item.text + delta, open = true))
+        }
+
+        override fun style(opts: MdStyle) {
+            styleCodePane(codePane, opts)
+            val view = codePane.viewport.view
+            when (view) {
+                is CodeField -> {
+                    view.font = style.editorFont
+                    view.background = opts.preBg
+                    view.getEditor(false)?.let { ed -> applyEditorChrome(ed, opts, view.soft) }
+                }
+                is JBTextArea -> styleTextArea(view, opts)
+            }
+            if (view is JComponent) {
+                sizeCodeField(view, fieldText(view))
+                sizeCodePane(codePane, view)
+            }
+            panel.background = opts.preBg
+            panel.palette(palette(opts))
+            val next = spec().font
+            if (font == next) return
+            font = next
+            hash = 0
+            kick()
+        }
+
+        private fun kick() {
+            val item = desc as Desc.Code
+            if (!Registry.`is`("kilo.diagram.inline.enabled", true)) {
+                status("")
+                showSource()
+                return
+            }
+            if (item.open) {
+                showSource()
+                status(KiloBundle.message("diagram.rendering"))
+                return
+            }
+            val code = item.text.hashCode()
+            if (hash == code) return
+            hash = code
+            status(KiloBundle.message("diagram.rendering"))
+            val seq = ++gen
+            service<Diagrams>().render(item.text, spec(), disposable) { out ->
+                if (seq != gen) return@render
+                when (out) {
+                    is Out.Ok -> ok(out)
+                    is Out.Err -> fail(out)
+                }
+            }
+        }
+
+        private fun ok(out: Out.Ok) {
+            panel.art(out.art)
+            showDiagram()
+            status("")
+            root.revalidate()
+            root.repaint()
+        }
+
+        /**
+         * A diagram type this engine does not draw is not a broken diagram, so it reads as a note rather
+         * than an error. `classDiagram`, `stateDiagram` and friends are common in model output and marking
+         * every one of them red would report working markdown as a failure.
+         */
+        private fun fail(out: Out.Err) {
+            if (out.fault == Fault.Unsupported) {
+                status(KiloBundle.message("diagram.unsupported"))
+                showSource()
+                root.revalidate()
+                root.repaint()
+                return
+            }
+            fail(out.message)
+        }
+
+        private fun fail(message: String) {
+            val text = message.ifBlank { KiloBundle.message("diagram.rendering") }
+            status(KiloBundle.message("diagram.error", text), true)
+            showSource()
+            root.revalidate()
+            root.repaint()
+        }
+
+        private fun showDiagram() {
+            panel.isVisible = true
+            codePane.isVisible = false
+        }
+
+        private fun showSource() {
+            panel.isVisible = false
+            codePane.isVisible = true
+        }
+
+        private fun status(text: String, error: Boolean = false) {
+            label.text = text
+            label.foreground = if (error) UiStyle.Colors.errorLabelForeground() else SessionUiStyle.Text.Secondary.foreground()
+            label.isVisible = text.isNotEmpty()
+        }
+
+        private fun updateCode(text: String) {
+            val value = text.trimEnd('\n')
+            val view = codePane.viewport.view
+            when (view) {
+                is CodeField -> view.text = value
+                is JBTextArea -> view.text = value
+            }
+            if (view is JComponent) {
+                sizeCodeField(view, value)
+                sizeCodePane(codePane, view)
             }
         }
     }
@@ -1036,20 +1446,7 @@ internal open class MdViewHybrid(
             val kind = item.kind as Kind.Terminal
             view.font = style.editorFont
             view.background = opts.preBg
-            view.getEditor(false)?.let { ed ->
-                style.applyToEditor(ed)
-                ed.setBorder(JBUI.Borders.empty())
-                ed.scrollPane.border = JBUI.Borders.empty()
-                ed.scrollPane.viewportBorder = JBUI.Borders.empty()
-                ed.backgroundColor = opts.preBg
-                ed.scrollPane.background = opts.preBg
-                ed.scrollPane.isOpaque = true
-                ed.scrollPane.viewport.isOpaque = true
-                ed.scrollPane.viewport.background = opts.preBg
-                ed.settings.isUseSoftWraps = view.soft
-                ed.scrollPane.horizontalScrollBarPolicy = ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER
-                ed.scrollPane.verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
-            }
+            view.getEditor(false)?.let { ed -> applyEditorChrome(ed, opts, view.soft) }
             val term = MdTerminal.decode(item.text, kind.stream)
             val value = shellDisplay(term, kind.mode)
             if (view.text != value.text) view.text = value.text
@@ -1061,46 +1458,6 @@ internal open class MdViewHybrid(
         override fun grow(delta: String) {
             val item = desc as Desc.Code
             update(item.copy(text = item.text + delta))
-        }
-    }
-
-    private inner class Visitor : AbstractVisitor() {
-        val blocks = mutableListOf<Desc>()
-        private val run = StringBuilder()
-
-        override fun visit(document: Document) {
-            visitChildren(document)
-            flush()
-        }
-
-        override fun visit(code: FencedCodeBlock) {
-            flush()
-            blocks.add(Desc.Code(code.literal, MdLanguage.kind(code.info)))
-        }
-
-        override fun visit(code: IndentedCodeBlock) {
-            flush()
-            blocks.add(Desc.Code(code.literal, MdLanguage.kind(null)))
-        }
-
-        private fun flush() {
-            if (run.isEmpty()) return
-            blocks.add(Desc.Html(run.toString()))
-            run.clear()
-        }
-
-        public override fun visitChildren(parent: Node) {
-            var child = parent.firstChild
-            while (child != null) {
-                val next = child.next
-                if (child is ThematicBreak) {
-                    child = next
-                    continue
-                }
-                if (child is FencedCodeBlock || child is IndentedCodeBlock) child.accept(this)
-                if (child is Block && child !is FencedCodeBlock && child !is IndentedCodeBlock) run.append(renderer.render(child))
-                child = next
-            }
         }
     }
 }
